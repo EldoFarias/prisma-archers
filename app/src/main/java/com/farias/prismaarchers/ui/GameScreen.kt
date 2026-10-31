@@ -11,6 +11,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -159,7 +160,7 @@ fun GameScreen(host: GameHost, ads: AdsManager, sound: SoundManager, onGreatMome
                 Spacer(Modifier.width(12.dp))
                 Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { TitlePill(host) }
                 Spacer(Modifier.width(12.dp))
-                Box(Modifier.width(44.dp))
+                PanoramaButton(host.overview) { host.toggleOverview() }
             }
             Spacer(Modifier.height(8.dp))
             ScoreText(host)
@@ -190,6 +191,8 @@ fun GameScreen(host: GameHost, ads: AdsManager, sound: SoundManager, onGreatMome
                 TurnPill(host.myTurn, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 70.dp))
             }
         }
+
+        if (host.phase == Phase.PLAYING) DuelIntro(host, Modifier.align(Alignment.Center).padding(bottom = 120.dp))
 
         Box(Modifier.align(Alignment.BottomCenter).navigationBarsPadding()) { BannerAd(ads) }
 
@@ -257,14 +260,102 @@ private fun WindPill(kmh: Int) {
 @Composable
 private fun TurnPill(mine: Boolean, modifier: Modifier) {
     val shape = RoundedCornerShape(50)
-    Text(
-        stringResource(if (mine) R.string.your_turn else R.string.enemy_turn),
-        style = Styles.plain(14, if (mine) Color(0xFF34D399) else Color(0xFFFCA5A5), FontWeight.Black),
-        modifier = modifier
+    // Slides and pops when the turn changes.
+    androidx.compose.animation.AnimatedContent(
+        targetState = mine,
+        transitionSpec = {
+            (androidx.compose.animation.slideInVertically(spring(dampingRatio = 0.6f, stiffness = 400f)) { it } + fadeIn(tween(180))) togetherWith
+                (androidx.compose.animation.slideOutVertically(tween(160)) { -it } + fadeOut(tween(160)))
+        },
+        modifier = modifier,
+        label = "turn",
+    ) { m ->
+        Row(
+            Modifier
+                .clip(shape)
+                .background(Color(0xB30B0720))
+                .border(1.dp, (if (m) Color(0xFF34D399) else Color(0xFFF43F5E)).copy(alpha = 0.6f), shape)
+                .padding(horizontal = 16.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(8.dp).clip(RoundedCornerShape(50)).background(if (m) Color(0xFF34D399) else Color(0xFFF43F5E)))
+            Spacer(Modifier.width(8.dp))
+            Text(
+                stringResource(if (m) R.string.your_turn else R.string.enemy_turn),
+                style = Styles.plain(14, if (m) Color(0xFFA7F3D0) else Color(0xFFFCA5A5), FontWeight.Black),
+            )
+        }
+    }
+}
+
+/** Camera button: pulls back to show both archers (lit while active). */
+@Composable
+private fun PanoramaButton(active: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(50)
+    Box(
+        Modifier
+            .size(44.dp)
             .clip(shape)
-            .background(Color(0x8C0B0720))
-            .padding(horizontal = 14.dp, vertical = 6.dp),
-    )
+            .background(if (active) Brush.verticalGradient(listOf(Color(0xFFFACC15), Color(0xFFF97316))) else Brush.verticalGradient(listOf(Palette.Glass, Palette.Glass)))
+            .border(1.dp, if (active) Color.White.copy(alpha = 0.6f) else Palette.GlassBorder, shape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.size(22.dp)) {
+            val c = if (active) Color(0xFF3B1A00) else Color.White
+            val w = size.width
+            val sw = w * 0.1f
+            val l = w * 0.32f
+            // Four corner brackets
+            for (cx in 0..1) for (cy in 0..1) {
+                val x = if (cx == 0) sw / 2 else w - sw / 2
+                val y = if (cy == 0) sw / 2 else w - sw / 2
+                val dx = if (cx == 0) l else -l
+                val dy = if (cy == 0) l else -l
+                drawLine(c, Offset(x, y), Offset(x + dx, y), sw, StrokeCap.Round)
+                drawLine(c, Offset(x, y), Offset(x, y + dy), sw, StrokeCap.Round)
+            }
+            // Two little archers facing each other
+            drawCircle(c, w * 0.08f, Offset(w * 0.3f, w * 0.45f))
+            drawLine(c, Offset(w * 0.3f, w * 0.52f), Offset(w * 0.3f, w * 0.7f), sw * 0.8f, StrokeCap.Round)
+            drawCircle(c, w * 0.08f, Offset(w * 0.7f, w * 0.45f))
+            drawLine(c, Offset(w * 0.7f, w * 0.52f), Offset(w * 0.7f, w * 0.7f), sw * 0.8f, StrokeCap.Round)
+        }
+    }
+}
+
+/** Opening banner of each duel: level (or survival count) and the world, punching in then fading. */
+@Composable
+private fun DuelIntro(host: GameHost, modifier: Modifier) {
+    val anim = remember(host.duelId) { Animatable(0f) }
+    LaunchedEffect(host.duelId) {
+        anim.snapTo(0f)
+        anim.animateTo(1f, tween(1700, easing = androidx.compose.animation.core.LinearEasing))
+    }
+    val done by remember(host.duelId) { androidx.compose.runtime.derivedStateOf { anim.value >= 1f } }
+    if (done) return
+    val title = when {
+        host.endless -> stringResource(R.string.kills_x, host.kills)
+        host.daily -> stringResource(R.string.daily_short)
+        else -> stringResource(R.string.level_x, host.level)
+    }
+    Column(
+        modifier.graphicsLayer {
+            val t = anim.value
+            val inT = (t / 0.18f).coerceIn(0f, 1f)
+            val sc = if (t < 0.18f) 1.6f - 0.6f * easeOutBack(inT) else 1f + (t - 0.18f) * 0.06f
+            scaleX = sc
+            scaleY = sc
+            alpha = if (t < 0.12f) t / 0.12f else (1f - (t - 0.75f) / 0.25f).coerceIn(0f, 1f)
+        },
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        if (host.boss) CrownIcon(Modifier.size(46.dp, 34.dp))
+        Text(title.uppercase(), style = Styles.gradient(44), textAlign = TextAlign.Center)
+        Text(stringResource(host.world.nameRes), style = Styles.glow(18, Color.White, FontWeight.ExtraBold))
+        Spacer(Modifier.height(6.dp))
+        Text("⚔", style = Styles.glow(30, Palette.Gold, FontWeight.Black))
+    }
 }
 
 @Composable
@@ -464,6 +555,7 @@ private fun WinOverlay(host: GameHost, ads: AdsManager, sound: SoundManager, onG
                     textAlign = TextAlign.Center,
                 )
                 if (!host.daily) Text(stringResource(R.string.level_x, host.level), style = Styles.plain(17, Palette.TextSecondary, FontWeight.Bold))
+                WinStars(host.stars, sound)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
                     Text(host.score.toString(), style = Styles.glow(44, Color.White, FontWeight.Black))
                     if (host.newBest) {
@@ -474,7 +566,7 @@ private fun WinOverlay(host: GameHost, ads: AdsManager, sound: SoundManager, onG
                 if (host.headsThisDuel > 0) {
                     Text(stringResource(R.string.headshots_x, host.headsThisDuel), style = Styles.glow(17, Color(0xFFFFD34D), FontWeight.Black))
                 }
-                CoinsEarned(host.lastReward + bonus, big = true)
+                CountUpCoins(host.lastReward + bonus)
                 if (bonus == 0 && host.lastReward > 0 && ads.rewardedReady) {
                     SecondaryButton(stringResource(R.string.triple_video)) {
                         ads.showRewarded {
@@ -511,5 +603,46 @@ fun NewBestBadge() {
             .padding(horizontal = 10.dp, vertical = 4.dp),
     ) {
         Text(stringResource(R.string.new_best), style = Styles.plain(13, Color(0xFF3B2300), FontWeight.Black))
+    }
+}
+
+/** Three stars that pop in one after the other (the earned ones fill with gold). */
+@Composable
+private fun WinStars(stars: Int, sound: SoundManager) {
+    Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        for (i in 0 until 3) {
+            val a = remember { Animatable(0f) }
+            LaunchedEffect(Unit) {
+                delay(250L + i * 260L)
+                if (i < stars) sound.play(Sfx.COIN, 0.6f, 1f + i * 0.18f)
+                a.animateTo(1f, spring(dampingRatio = 0.45f, stiffness = 300f))
+            }
+            StarIcon(
+                filled = i < stars,
+                modifier = Modifier
+                    .size(if (i == 1) 58.dp else 46.dp)
+                    .graphicsLayer {
+                        scaleX = a.value
+                        scaleY = a.value
+                        rotationZ = (1f - a.value) * (if (i == 0) -60f else 60f)
+                        translationY = if (i == 1) 0f else 6.dp.toPx()
+                    },
+            )
+        }
+    }
+}
+
+/** Coins earned, counting up from zero. */
+@Composable
+private fun CountUpCoins(amount: Int) {
+    val a = remember { Animatable(0f) }
+    LaunchedEffect(amount) {
+        delay(500)
+        a.animateTo(amount.toFloat(), tween(900))
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        CoinIcon(Modifier.size(30.dp))
+        Spacer(Modifier.width(8.dp))
+        Text("+" + a.value.toInt(), style = Styles.glow(30, Palette.Gold, FontWeight.Black))
     }
 }

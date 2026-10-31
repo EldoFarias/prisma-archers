@@ -78,6 +78,15 @@ class GameHost(context: Context) {
     var headsThisDuel by mutableIntStateOf(0)
         private set
     private var failsKey = -1
+    /** Camera pulled back to show both archers. */
+    var overview by mutableStateOf(false)
+        private set
+    /** Changes at every new duel (drives the opening banner). */
+    var duelId by mutableIntStateOf(0)
+        private set
+    /** 1–3 stars for the last win (by health left). */
+    var stars by mutableIntStateOf(0)
+        private set
 
     // Looks (read by the painter)
     var world: World = Looks.world(1)
@@ -209,6 +218,8 @@ class GameHost(context: Context) {
         applyLooks()
         Progress.useTrialGame()
         game.startPlay(spec)
+        overview = false
+        duelId++
         setOpponent(spec, worldLevel)
         MusicPlayer.select(MusicPlayer.trackFor(worldLevel, spec.boss || endless))
     }
@@ -218,6 +229,12 @@ class GameHost(context: Context) {
         shields += 1
         game.duel.shields += 1
         sound.play(Sfx.REVIVE, 0.8f)
+    }
+
+    fun toggleOverview() {
+        overview = !overview
+        game.overview = overview
+        sound.play(Sfx.WHOOSH, 0.5f, if (overview) 0.8f else 1.2f)
     }
 
     fun clearNotice() {
@@ -293,6 +310,8 @@ class GameHost(context: Context) {
         shields = 0
         myTurn = true
         game.nextOpponent(spec, hp, 0)
+        game.overview = overview
+        duelId++
         setOpponent(spec, 1 + kills * 10)
         sound.play(Sfx.WHOOSH)
     }
@@ -351,6 +370,11 @@ class GameHost(context: Context) {
                 tookDamage = false
                 nextOpponentAt = game.clock + 1.2f
                 return
+            }
+            stars = when {
+                duel.playerHp >= 70 -> 3
+                duel.playerHp >= 35 -> 2
+                else -> 1
             }
             phase = Phase.WON
             sound.play(Sfx.RECORD)

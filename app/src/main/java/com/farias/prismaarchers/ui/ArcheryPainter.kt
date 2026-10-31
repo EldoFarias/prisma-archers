@@ -40,6 +40,7 @@ import com.farias.prismaarchers.game.Ragdoll
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.exp
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
@@ -139,6 +140,10 @@ class ArcheryPainter {
     private var bowStroke = Stroke(1f, cap = StrokeCap.Round, join = StrokeJoin.Round)
     private var glowStroke = Stroke(1f, cap = StrokeCap.Round, join = StrokeJoin.Round)
     private var thinStroke = Stroke(1f, cap = StrokeCap.Round)
+    private var outlineStroke = Stroke(1f, join = StrokeJoin.Round)
+    private var roundStroke = Stroke(1f, join = StrokeJoin.Round)
+    private var gaugeStroke = Stroke(1f, cap = StrokeCap.Round)
+    private var bowOutline = Stroke(1f, cap = StrokeCap.Round, join = StrokeJoin.Round)
 
     init {
         val rnd = Random(5)
@@ -160,6 +165,10 @@ class ArcheryPainter {
         bowStroke = Stroke(0.065f * k, cap = StrokeCap.Round, join = StrokeJoin.Round)
         glowStroke = Stroke(0.17f * k, cap = StrokeCap.Round, join = StrokeJoin.Round)
         thinStroke = Stroke(max(1f, 0.018f * k), cap = StrokeCap.Round)
+        outlineStroke = Stroke(max(2.4f, OUTLINE * k * 2f) + 0.06f * k, join = StrokeJoin.Round)
+        roundStroke = Stroke(0.06f * k, join = StrokeJoin.Round)
+        gaugeStroke = Stroke(max(4f, 0.075f * k), cap = StrokeCap.Round)
+        bowOutline = Stroke(0.065f * k + max(2.4f, OUTLINE * k * 2f), cap = StrokeCap.Round, join = StrokeJoin.Round)
     }
 
     // ------------------------------------------------------------------ frame
@@ -180,7 +189,24 @@ class ArcheryPainter {
         // Platforms
         for (p in duel.platforms) drawPlatform(d, p.x0, p.x1, p.top, h, world)
         // Arrows in the ground / bodies
-        for (a in duel.arrows) if (a !== duel.flying) drawArrow(d, a.x, a.y, a.angle, a.byPlayer, if (a.byPlayer) host.playerBow else host.enemyBow, 1f)
+        for (a in duel.arrows) {
+            if (a === duel.flying) continue
+            var ang = a.angle
+            var axw = a.x
+            var ayw = a.y
+            if (a.stuckIn == null && a.stuckTime >= 0f) {
+                // Arrows that hit the ground quiver for a moment around their tip.
+                val t = duel.time - a.stuckTime
+                if (t < 0.9f) {
+                    val tipX = a.x + cos(a.angle) * 0.36f
+                    val tipY = a.y + sin(a.angle) * 0.36f
+                    ang += sin(t * 48f) * exp(-t * 6f) * 0.14f
+                    axw = tipX - cos(ang) * 0.36f
+                    ayw = tipY - sin(ang) * 0.36f
+                }
+            }
+            drawArrow(d, axw, ayw, ang, a.byPlayer, if (a.byPlayer) host.playerBow else host.enemyBow, 1f)
+        }
         // Archers
         val enemyHelmet = duel.spec.enemyHelmet
         drawArcher(d, duel.enemy, host.enemyOutfit, host.enemyBow, enemyHelmet, duel.turn == Duel.Turn.ENEMY && duel.enemy.alive, g.clock)
@@ -199,11 +225,23 @@ class ArcheryPainter {
         // Aim guide
         if (g.aiming && g.aimPower > 0.04f && duel.turn == Duel.Turn.PLAYER) {
             val n = g.guide(guide)
+            val dotK = max(k, w / 22f)
             for (i in 0 until n) {
                 val f = 1f - i / n.toFloat()
-                d.drawCircle(Color.White.copy(alpha = 0.85f * f), (0.035f + 0.03f * f) * k, Offset(sx(guide[i * 2]), sy(guide[i * 2 + 1])))
+                val o = Offset(sx(guide[i * 2]), sy(guide[i * 2 + 1]))
+                val rr = (0.035f + 0.03f * f) * dotK
+                d.drawCircle(OUTLINE_C.copy(alpha = 0.45f * f), rr + 2f, o)
+                d.drawCircle(Color.White.copy(alpha = 0.9f * f), rr, o)
             }
             val pl = duel.player
+            // Power gauge: an arc around the archer filling green → yellow → red
+            val gc = Offset(sx(pl.x[Ragdoll.CHEST]), sy(pl.y[Ragdoll.CHEST]))
+            val gr = max(1.15f * k, w * 0.12f)
+            val p = g.aimPower.coerceIn(0f, 1f)
+            val gcol = if (p < 0.5f) androidx.compose.ui.graphics.lerp(Color(0xFF34D399), Color(0xFFFACC15), p * 2f)
+            else androidx.compose.ui.graphics.lerp(Color(0xFFFACC15), Color(0xFFF43F5E), (p - 0.5f) * 2f)
+            d.drawArc(Color(0x55000000), 150f, 240f, false, Offset(gc.x - gr, gc.y - gr), Size(gr * 2f, gr * 2f), style = gaugeStroke)
+            if (p > 0.01f) d.drawArc(gcol, 150f, 240f * p, false, Offset(gc.x - gr, gc.y - gr), Size(gr * 2f, gr * 2f), style = gaugeStroke)
             val deg = Math.round(Math.toDegrees(g.aimAngle.toDouble())).toInt()
             val pct = Math.round(g.aimPower * 100f)
             val t = layout(m, "$deg°  $pct%", textStyleSmall)
@@ -238,8 +276,9 @@ class ArcheryPainter {
             offscreen(d, m, duel.enemy, w, h, Color(0xFFF43F5E), duel.spec.distance)
             offscreen(d, m, duel.player, w, h, Color(0xFF34D399), duel.spec.distance)
         }
-        // Slow motion vignette
+        // Slow motion vignette and the headshot flash
         if (g.slow > 0.02f) d.drawRect(vignette, alpha = (g.slow * 0.75f).coerceAtMost(1f))
+        if (g.flash > 0.02f) d.drawRect(Color.White, alpha = (g.flash * 0.45f).coerceAtMost(1f))
     }
 
     // ------------------------------------------------------------------ scenery
@@ -336,6 +375,7 @@ class ArcheryPainter {
         d.drawCircle(sunBrush, sunR * 3.2f, sunPos)
         d.drawCircle(rgb(world.sun), sunR, sunPos)
         val detailed = com.farias.prismaarchers.data.Progress.detailedScenery
+        if (detailed) clouds(d, w, h, clock, world, windKmh)
         // Far layer
         val farY = h * 0.62f + (g0(camY) * k * 0.12f)
         if (detailed) {
@@ -345,6 +385,22 @@ class ArcheryPainter {
         }
         val nearY = h * 0.72f + (g0(camY) * k * 0.3f)
         layer(d, nearPath, nearColor, camX * k * 0.28f, nearY)
+        // A little atmospheric haze at the foot of the hills
+        d.drawRect(rgb(world.skyBottom, 0.12f), topLeft = Offset(0f, nearY - w * 0.05f), size = Size(w, h))
+        // Wind gusts: thin streaks blowing across the screen
+        if (windKmh != 0) {
+            val n = (abs(windKmh) / 3).coerceIn(3, 14)
+            val dir = if (windKmh > 0) 1f else -1f
+            val len = w * (0.05f + abs(windKmh) * 0.004f)
+            for (i in 0 until n) {
+                val sp = 0.25f + airS[i] * 0.25f + abs(windKmh) * 0.01f
+                val u = frac(airA[i] + clock * sp * dir)
+                val x = -len + u * (w + 2f * len)
+                val y = h * (0.12f + airB[i] * 0.6f) + sin(clock * 2f + i) * 6f
+                val a = 0.25f * sin(u * PI_F).coerceAtLeast(0f)
+                d.drawLine(Color.White.copy(alpha = a), Offset(x, y), Offset(x - dir * len, y), max(1.5f, w * 0.0025f), StrokeCap.Round)
+            }
+        }
         // Ambient particles
         if (detailed && world.air != 0 && world.air != 4) {
             val wind = windKmh / 30f
@@ -367,6 +423,26 @@ class ArcheryPainter {
 
     private fun g0(camY: Float) = camY - 1.6f
 
+    /** Soft clouds made of a few overlapping circles, drifting slowly (faint wisps at night). */
+    private fun clouds(d: DrawScope, w: Float, h: Float, clock: Float, world: World, windKmh: Int) {
+        val night = world.air == 4 || world.scenery == 3
+        val c = if (night) Color.White.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.72f)
+        val shade = if (night) Color.Transparent else rgb(world.skyBottom, 0.5f)
+        val drift = 0.006f + windKmh * 0.0006f
+        for (i in 0 until 5) {
+            val s = w * (0.09f + airS[i] * 0.05f)
+            val span = w + s * 6f
+            val u = frac(airA[i + 7] + clock * drift * (0.6f + airS[i] * 0.5f) - camX * k * 0.04f / span)
+            val x = -s * 3f + u * span
+            val y = h * (0.07f + airB[i + 7] * 0.28f)
+            d.drawOval(shade, Offset(x - s * 1.6f, y + s * 0.1f), Size(s * 3.4f, s * 0.9f))
+            d.drawCircle(c, s * 0.75f, Offset(x - s * 0.9f, y + s * 0.15f))
+            d.drawCircle(c, s, Offset(x, y - s * 0.1f))
+            d.drawCircle(c, s * 0.8f, Offset(x + s * 0.95f, y + s * 0.1f))
+            d.drawOval(c, Offset(x - s * 1.6f, y + s * 0.05f), Size(s * 3.4f, s * 0.75f))
+        }
+    }
+
     private fun layer(d: DrawScope, p: Path, color: Color, scroll: Float, baseY: Float) {
         var off = -(scroll % tileW)
         if (off > 0f) off -= tileW
@@ -383,70 +459,214 @@ class ArcheryPainter {
         val t = sy(top)
         if (r < 0f || l > d.size.width || t > h) return
         val rock = rgb(world.rock)
+        val ol = max(2f, OUTLINE * k * 1.6f)
+        d.drawRect(OUTLINE_C, Offset(l - ol, t), Size(r - l + ol * 2f, h - t + 4f))
         d.drawRect(rock, Offset(l, t), Size(r - l, h - t + 4f))
-        // Shading and stone courses
-        d.drawRect(Color(0x33000000), Offset(r - 0.35f * k, t), Size(0.35f * k, h - t))
-        d.drawRect(Color(0x1FFFFFFF), Offset(l, t), Size(0.25f * k, h - t))
-        var yy = t + 0.6f * k
+        // Stone blocks with a lit top edge and a shadowed bottom edge
+        val rowH = 0.55f * k
+        val blockW = 1.3f * k
+        val lineW = max(1f, 0.035f * k)
+        var yy = t + 0.2f * k
         var row = 0
+        val hi = Color.White.copy(alpha = 0.13f)
+        val lo = Color(0x38000000)
         while (yy < h) {
-            d.drawLine(Color(0x26000000), Offset(l, yy), Offset(r, yy), max(1f, 0.04f * k))
-            val shift = if (row % 2 == 0) 0.4f else 1.1f
-            var xx = l + shift * k
+            val shift = if (row % 2 == 0) 0.25f * k else 0.9f * k
+            var xx = l - shift
+            var col = 0
             while (xx < r) {
-                d.drawLine(Color(0x1F000000), Offset(xx, yy - 0.6f * k), Offset(xx, yy), max(1f, 0.035f * k))
-                xx += 1.4f * k
+                val bx0 = max(l, xx + lineW)
+                val bx1 = min(r, xx + blockW - lineW)
+                if (bx1 > bx0) {
+                    // Slight tone variation per block
+                    val v = (((row * 31 + col * 17) % 7) - 3) * 0.012f
+                    if (v != 0f) d.drawRect(if (v > 0f) Color.White.copy(alpha = v) else Color.Black.copy(alpha = -v), Offset(bx0, yy), Size(bx1 - bx0, rowH - lineW))
+                    d.drawLine(hi, Offset(bx0, yy + lineW), Offset(bx1, yy + lineW), lineW)
+                    d.drawLine(lo, Offset(bx0, yy + rowH - lineW), Offset(bx1, yy + rowH - lineW), lineW * 1.4f)
+                    d.drawLine(lo, Offset(bx1, yy), Offset(bx1, yy + rowH), lineW)
+                }
+                xx += blockW
+                col++
             }
-            yy += 0.6f * k
+            yy += rowH
             row++
         }
-        // Grass / snow / sand cap
-        d.drawRect(rgb(world.rockTop), Offset(l - 0.06f * k, t - 0.04f * k), Size(r - l + 0.12f * k, 0.2f * k))
-        d.drawRect(Color(0x33000000), Offset(l - 0.06f * k, t + 0.14f * k), Size(r - l + 0.12f * k, 0.05f * k))
+        // Depth shading: darker towards the bottom and on the right side
+        d.drawRect(Color(0x26000000), Offset(l, t + 1.4f * k), Size(r - l, h))
+        d.drawRect(Color(0x26000000), Offset(l, t + 3.2f * k), Size(r - l, h))
+        d.drawRect(Color(0x30000000), Offset(r - 0.3f * k, t), Size(0.3f * k, h - t))
+        // Top cap (grass / snow / sand) with an outline and tufts along the edge
+        val cap = rgb(world.rockTop)
+        val capH = 0.22f * k
+        val cr = androidx.compose.ui.geometry.CornerRadius(capH * 0.5f)
+        d.drawRoundRect(OUTLINE_C, Offset(l - 0.1f * k - ol, t - 0.06f * k - ol), Size(r - l + 0.2f * k + ol * 2f, capH + ol * 2f), cr)
+        d.drawRoundRect(cap, Offset(l - 0.1f * k, t - 0.06f * k), Size(r - l + 0.2f * k, capH), cr)
+        d.drawRoundRect(Palette.darker(cap, 0.25f), Offset(l - 0.1f * k, t + 0.08f * k), Size(r - l + 0.2f * k, capH * 0.36f), cr)
+        d.drawLine(Palette.lighter(cap, 0.35f), Offset(l - 0.02f * k, t - 0.03f * k), Offset(r + 0.02f * k, t - 0.03f * k), max(1f, 0.03f * k), StrokeCap.Round)
+        // Tufts
+        path.reset()
+        val step = 0.16f * k
+        var i = 0
+        var gx = l - 0.06f * k
+        path.moveTo(gx, t - 0.04f * k)
+        while (gx < r + 0.06f * k) {
+            val hgt = (0.06f + ((i * 37) % 5) * 0.022f) * k
+            path.lineTo(gx + step * 0.5f, t - 0.04f * k - hgt)
+            path.lineTo(gx + step, t - 0.04f * k)
+            gx += step
+            i++
+        }
+        path.close()
+        d.drawPath(path, Palette.darker(cap, 0.08f))
+        // Drips of the cap down the sides
+        d.drawRoundRect(cap, Offset(l - 0.1f * k, t + 0.05f * k), Size(0.12f * k, 0.28f * k), cr)
+        d.drawRoundRect(cap, Offset(r - 0.02f * k, t + 0.05f * k), Size(0.12f * k, 0.2f * k), cr)
     }
 
     // ------------------------------------------------------------------ archers
+
+    private var pass = 0
+    private var outPx = 1f
 
     /** Draws a ragdoll archer with its look; [nock] puts an arrow on the string. */
     fun drawArcher(d: DrawScope, r: Ragdoll, o: Outfit, b: Bow, helmet: Boolean, nock: Boolean, clock: Float) {
         val x = r.x
         val y = r.y
+        outPx = max(1.2f, OUTLINE * k)
+        // Soft contact shadow under a standing archer
+        if (r.alive) {
+            val gx = sx(r.rootX + 0.02f * r.facing)
+            val gy = sy(r.rootY)
+            d.drawOval(Color(0x40000000), Offset(gx - 0.5f * k, gy - 0.06f * k), Size(1.0f * k, 0.13f * k))
+        }
+        // Torso frame: axis (pelvis → neck) and the front direction
+        var ax = x[Ragdoll.NECK] - x[Ragdoll.PELVIS]
+        var ay = y[Ragdoll.NECK] - y[Ragdoll.PELVIS]
+        val al = sqrt(ax * ax + ay * ay).coerceAtLeast(1e-4f)
+        ax /= al; ay /= al
+        val f = r.facing
+        val fx = ay * f
+        val fy = -ax * f
         val limbs = rgb(o.limbs)
-        val limbsBack = Palette.darker(limbs, 0.3f)
+        val limbsBack = Palette.darker(limbs, 0.28f)
         val body = rgb(o.body)
-        val lw = 0.12f * k
-        // Back limbs
-        line(d, limbsBack, x[Ragdoll.PELVIS], y[Ragdoll.PELVIS], x[Ragdoll.L_KNEE], y[Ragdoll.L_KNEE], lw)
-        line(d, limbsBack, x[Ragdoll.L_KNEE], y[Ragdoll.L_KNEE], x[Ragdoll.L_FOOT], y[Ragdoll.L_FOOT], lw * 0.9f)
-        // Torso
-        line(d, Palette.darker(body, 0.12f), x[Ragdoll.CHEST], y[Ragdoll.CHEST], x[Ragdoll.PELVIS], y[Ragdoll.PELVIS], 0.26f * k)
-        line(d, body, x[Ragdoll.NECK], y[Ragdoll.NECK], x[Ragdoll.CHEST], y[Ragdoll.CHEST], 0.28f * k)
-        // Belt
-        val bx = x[Ragdoll.CHEST] + (x[Ragdoll.PELVIS] - x[Ragdoll.CHEST]) * 0.72f
-        val by = y[Ragdoll.CHEST] + (y[Ragdoll.PELVIS] - y[Ragdoll.CHEST]) * 0.72f
-        d.drawCircle(Palette.darker(body, 0.45f), 0.13f * k, Offset(sx(bx), sy(by)))
-        // Front leg
-        line(d, limbs, x[Ragdoll.PELVIS], y[Ragdoll.PELVIS], x[Ragdoll.R_KNEE], y[Ragdoll.R_KNEE], lw)
-        line(d, limbs, x[Ragdoll.R_KNEE], y[Ragdoll.R_KNEE], x[Ragdoll.R_FOOT], y[Ragdoll.R_FOOT], lw * 0.9f)
-        // Boots
-        d.drawCircle(Palette.darker(limbs, 0.5f), 0.075f * k, Offset(sx(x[Ragdoll.L_FOOT]), sy(y[Ragdoll.L_FOOT])))
-        d.drawCircle(Palette.darker(limbs, 0.5f), 0.075f * k, Offset(sx(x[Ragdoll.R_FOOT]), sy(y[Ragdoll.R_FOOT])))
-        // Draw arm (back hand on the string)
-        line(d, Palette.darker(body, 0.2f), x[Ragdoll.NECK], y[Ragdoll.NECK], x[Ragdoll.L_ELBOW], y[Ragdoll.L_ELBOW], lw * 0.95f)
-        line(d, Palette.darker(body, 0.2f), x[Ragdoll.L_ELBOW], y[Ragdoll.L_ELBOW], x[Ragdoll.L_HAND], y[Ragdoll.L_HAND], lw * 0.85f)
+        val sleeveBack = Palette.darker(body, 0.25f)
+        val skin = rgb(o.head)
+        val boot = Palette.darker(limbs, 0.55f)
+        val shX = x[Ragdoll.NECK] - ax * 0.07f
+        val shY = y[Ragdoll.NECK] - ay * 0.07f
+        // Pass 0 draws every part fatter in the outline colour (one silhouette), pass 1 fills.
+        for (p in 0..1) {
+            pass = p
+            // Quiver on the back with fletchings sticking out
+            val qx0 = x[Ragdoll.NECK] - fx * 0.15f + ax * 0.12f
+            val qy0 = y[Ragdoll.NECK] - fy * 0.15f + ay * 0.12f
+            val qx1 = x[Ragdoll.PELVIS] - fx * 0.17f + ax * 0.2f
+            val qy1 = y[Ragdoll.PELVIS] - fy * 0.17f + ay * 0.2f
+            for (j in 0..2) {
+                val off = (j - 1) * 0.045f
+                seg(d, QUIVER_FLETCH[j], qx0 + fx * off, qy0 + fy * off, qx0 + fx * off * 1.4f + ax * 0.14f, qy0 + fy * off * 1.4f + ay * 0.14f, 0.045f)
+            }
+            seg(d, Color(0xFF7C4A21), qx0, qy0, qx1, qy1, 0.12f)
+            if (p == 1) seg(d, Color(0xFF9A6332), qx0 - fx * 0.02f, qy0 - fy * 0.02f, qx1 - fx * 0.02f, qy1 - fy * 0.02f, 0.04f)
+            // Back leg
+            seg(d, limbsBack, x[Ragdoll.PELVIS], y[Ragdoll.PELVIS], x[Ragdoll.L_KNEE], y[Ragdoll.L_KNEE], 0.14f)
+            seg(d, limbsBack, x[Ragdoll.L_KNEE], y[Ragdoll.L_KNEE], x[Ragdoll.L_FOOT], y[Ragdoll.L_FOOT], 0.115f)
+            bootAt(d, r, Ragdoll.L_KNEE, Ragdoll.L_FOOT, Palette.darker(boot, 0.2f))
+            // Drawing arm (behind the body)
+            seg(d, sleeveBack, shX, shY, x[Ragdoll.L_ELBOW], y[Ragdoll.L_ELBOW], 0.11f)
+            seg(d, sleeveBack, x[Ragdoll.L_ELBOW], y[Ragdoll.L_ELBOW], x[Ragdoll.L_HAND], y[Ragdoll.L_HAND], 0.09f)
+            dot(d, Palette.darker(skin, 0.1f), x[Ragdoll.L_HAND], y[Ragdoll.L_HAND], 0.058f)
+            // Tunic: wide at the shoulders, a flared hem below the belt
+            tunic(d, r, ax, ay, fx, fy, body)
+            // Neck
+            seg(d, Palette.darker(skin, 0.08f), x[Ragdoll.NECK], y[Ragdoll.NECK], x[Ragdoll.NECK] + ax * 0.08f, y[Ragdoll.NECK] + ay * 0.08f, 0.09f)
+            if (p == 1) {
+                // Belt with a buckle, and a light edge on the chest
+                val bx = x[Ragdoll.PELVIS] + ax * 0.1f
+                val by = y[Ragdoll.PELVIS] + ay * 0.1f
+                seg(d, Color(0xFF3B2414), bx - fx * 0.14f, by - fy * 0.14f, bx + fx * 0.14f, by + fy * 0.14f, 0.065f)
+                dot(d, Color(0xFFFACC15), bx + fx * 0.07f, by + fy * 0.07f, 0.03f)
+                seg(d, Palette.lighter(body, 0.25f), x[Ragdoll.NECK] + fx * 0.09f - ax * 0.1f, y[Ragdoll.NECK] + fy * 0.09f - ay * 0.1f, x[Ragdoll.PELVIS] + fx * 0.09f + ax * 0.2f, y[Ragdoll.PELVIS] + fy * 0.09f + ay * 0.2f, 0.035f)
+            }
+        }
+        // Front leg with its own outline so it reads over the back one
+        for (p in 0..1) {
+            pass = p
+            seg(d, limbs, x[Ragdoll.PELVIS], y[Ragdoll.PELVIS], x[Ragdoll.R_KNEE], y[Ragdoll.R_KNEE], 0.14f)
+            seg(d, limbs, x[Ragdoll.R_KNEE], y[Ragdoll.R_KNEE], x[Ragdoll.R_FOOT], y[Ragdoll.R_FOOT], 0.115f)
+            bootAt(d, r, Ragdoll.R_KNEE, Ragdoll.R_FOOT, boot)
+        }
+        pass = 1
+        dot(d, Palette.lighter(limbs, 0.2f), x[Ragdoll.R_KNEE], y[Ragdoll.R_KNEE], 0.035f)
         // Head
         drawHead(d, r, o, helmet)
         // Bow, string and nocked arrow
         drawBow(d, r, b, nock, clock)
-        // Bow arm
-        line(d, body, x[Ragdoll.NECK], y[Ragdoll.NECK], x[Ragdoll.R_ELBOW], y[Ragdoll.R_ELBOW], lw * 0.95f)
-        line(d, body, x[Ragdoll.R_ELBOW], y[Ragdoll.R_ELBOW], x[Ragdoll.R_HAND], y[Ragdoll.R_HAND], lw * 0.85f)
-        d.drawCircle(rgb(o.head), 0.06f * k, Offset(sx(x[Ragdoll.R_HAND]), sy(y[Ragdoll.R_HAND])))
-        d.drawCircle(rgb(o.head), 0.055f * k, Offset(sx(x[Ragdoll.L_HAND]), sy(y[Ragdoll.L_HAND])))
+        // Bow arm in front, with its outline
+        for (p in 0..1) {
+            pass = p
+            seg(d, body, shX, shY, x[Ragdoll.R_ELBOW], y[Ragdoll.R_ELBOW], 0.11f)
+            seg(d, body, x[Ragdoll.R_ELBOW], y[Ragdoll.R_ELBOW], x[Ragdoll.R_HAND], y[Ragdoll.R_HAND], 0.09f)
+            seg(d, Palette.darker(body, 0.3f), x[Ragdoll.R_ELBOW] + (x[Ragdoll.R_HAND] - x[Ragdoll.R_ELBOW]) * 0.55f, y[Ragdoll.R_ELBOW] + (y[Ragdoll.R_HAND] - y[Ragdoll.R_ELBOW]) * 0.55f, x[Ragdoll.R_HAND], y[Ragdoll.R_HAND], 0.1f)
+            dot(d, skin, x[Ragdoll.R_HAND], y[Ragdoll.R_HAND], 0.062f)
+        }
+        pass = 1
     }
 
-    private fun line(d: DrawScope, c: Color, x0: Float, y0: Float, x1: Float, y1: Float, wpx: Float) {
-        d.drawLine(c, Offset(sx(x0), sy(y0)), Offset(sx(x1), sy(y1)), wpx, StrokeCap.Round)
+    /** A limb segment (world coords, width in meters); in the outline pass it's fatter and dark. */
+    private fun seg(d: DrawScope, c: Color, x0: Float, y0: Float, x1: Float, y1: Float, wm: Float) {
+        val wpx = wm * k + if (pass == 0) outPx * 2f else 0f
+        d.drawLine(if (pass == 0) OUTLINE_C else c, Offset(sx(x0), sy(y0)), Offset(sx(x1), sy(y1)), wpx, StrokeCap.Round)
+    }
+
+    private fun dot(d: DrawScope, c: Color, x: Float, y: Float, rm: Float) {
+        d.drawCircle(if (pass == 0) OUTLINE_C else c, rm * k + if (pass == 0) outPx else 0f, Offset(sx(x), sy(y)))
+    }
+
+    /** Boot: the foot plus a short toe pointing forward (perpendicular to the shin). */
+    private fun bootAt(d: DrawScope, r: Ragdoll, knee: Int, foot: Int, c: Color) {
+        var dx = r.x[foot] - r.x[knee]
+        var dy = r.y[foot] - r.y[knee]
+        val l = sqrt(dx * dx + dy * dy).coerceAtLeast(1e-4f)
+        dx /= l; dy /= l
+        val tx = -dy * r.facing
+        val ty = dx * r.facing
+        val fx = r.x[foot] - dx * 0.04f
+        val fy = r.y[foot] - dy * 0.04f
+        seg(d, c, fx - dx * 0.1f, fy - dy * 0.1f, fx, fy, 0.13f)
+        seg(d, c, fx, fy, fx + tx * 0.13f, fy + ty * 0.13f, 0.09f)
+        if (pass == 1) seg(d, Color(0xFF1C1917), fx - tx * 0.02f + dx * 0.035f, fy - ty * 0.02f + dy * 0.035f, fx + tx * 0.15f + dx * 0.035f, fy + ty * 0.15f + dy * 0.035f, 0.025f)
+    }
+
+    private fun tunic(d: DrawScope, r: Ragdoll, ax: Float, ay: Float, fx: Float, fy: Float, c: Color) {
+        val nx = r.x[Ragdoll.NECK] - ax * 0.04f
+        val ny = r.y[Ragdoll.NECK] - ay * 0.04f
+        val px = r.x[Ragdoll.PELVIS]
+        val py = r.y[Ragdoll.PELVIS]
+        path.reset()
+        path.moveTo(sx(nx + fx * 0.15f), sy(ny + fy * 0.15f))
+        path.lineTo(sx(px + fx * 0.13f + ax * 0.08f), sy(py + fy * 0.13f + ay * 0.08f))
+        path.lineTo(sx(px + fx * 0.17f - ax * 0.17f), sy(py + fy * 0.17f - ay * 0.17f))
+        path.lineTo(sx(px - fx * 0.16f - ax * 0.17f), sy(py - fy * 0.16f - ay * 0.17f))
+        path.lineTo(sx(px - fx * 0.13f + ax * 0.08f), sy(py - fy * 0.13f + ay * 0.08f))
+        path.lineTo(sx(nx - fx * 0.15f), sy(ny - fy * 0.15f))
+        path.close()
+        if (pass == 0) {
+            d.drawPath(path, OUTLINE_C, style = outlineStroke)
+        } else {
+            d.drawPath(path, c)
+            d.drawPath(path, c, style = roundStroke)
+            // Shade the back half of the tunic
+            path2.reset()
+            path2.moveTo(sx(nx), sy(ny))
+            path2.lineTo(sx(px - ax * 0.17f), sy(py - ay * 0.17f))
+            path2.lineTo(sx(px - fx * 0.16f - ax * 0.17f), sy(py - fy * 0.16f - ay * 0.17f))
+            path2.lineTo(sx(px - fx * 0.13f + ax * 0.08f), sy(py - fy * 0.13f + ay * 0.08f))
+            path2.lineTo(sx(nx - fx * 0.15f), sy(ny - fy * 0.15f))
+            path2.close()
+            d.drawPath(path2, Color(0x24000000))
+        }
     }
 
     private fun drawHead(d: DrawScope, r: Ragdoll, o: Outfit, helmet: Boolean) {
@@ -454,25 +674,62 @@ class ArcheryPainter {
         val hy = sy(r.y[Ragdoll.HEAD])
         val nx = sx(r.x[Ragdoll.NECK])
         val ny = sy(r.y[Ragdoll.NECK])
-        val hr = Ragdoll.HEAD_R * k * 1.12f
+        val hr = Ragdoll.HEAD_R * k * 1.15f
         val tilt = Math.toDegrees(atan2((hx - nx).toDouble(), (ny - hy).toDouble())).toFloat()
         val f = r.facing
         val c = Offset(hx, hy)
         val hat = if (helmet) Hat.HELMET else o.hat
         val hatC = if (helmet) Color(0xFFCBD5E1) else rgb(o.hatColor)
+        val skin = rgb(o.head)
+        val aimLook = if (r.alive && !r.cheer) r.aim.coerceIn(-0.8f, 0.8f) else 0f
         d.rotate(tilt, c) {
             scale(f, 1f, c) {
-                // Hood goes behind the head
-                if (hat == Hat.HOOD) drawCircle(hatC, hr * 1.3f, Offset(hx - hr * 0.15f, hy - hr * 0.08f))
-                drawCircle(rgb(o.head), hr, c)
+                if (hat == Hat.HOOD) {
+                    drawCircle(OUTLINE_C, hr * 1.3f + outPx, Offset(hx - hr * 0.15f, hy - hr * 0.08f))
+                    drawCircle(hatC, hr * 1.3f, Offset(hx - hr * 0.15f, hy - hr * 0.08f))
+                }
+                drawCircle(OUTLINE_C, hr + outPx, c)
+                drawCircle(skin, hr, c)
+                // Ear and a shade on the back of the head
+                drawCircle(Palette.darker(skin, 0.12f), hr * 0.2f, Offset(hx - hr * 0.12f, hy + hr * 0.05f))
+                drawArc(Color(0x22000000), 100f, 160f, false, Offset(hx - hr, hy - hr), Size(hr * 2f, hr * 2f), style = Stroke(hr * 0.22f))
+                // Hair under the hat
+                if (hat != Hat.SKULL && hat != Hat.VISOR && hat != Hat.HELMET && hat != Hat.BAND) {
+                    drawArc(HAIR_C, 150f, 150f, true, Offset(hx - hr * 1.02f, hy - hr * 1.05f), Size(hr * 2.04f, hr * 1.7f))
+                }
                 // Face
                 if (hat == Hat.SKULL) {
                     drawCircle(Color(0xFF111827), hr * 0.2f, Offset(hx + hr * 0.18f, hy - hr * 0.08f))
                     drawCircle(Color(0xFF111827), hr * 0.2f, Offset(hx + hr * 0.62f, hy - hr * 0.08f))
                     drawRect(Color(0xFF111827), Offset(hx + hr * 0.28f, hy + hr * 0.38f), Size(hr * 0.42f, hr * 0.1f))
                 } else if (hat != Hat.VISOR) {
-                    drawCircle(Color(0xFF1F2937), hr * 0.13f, Offset(hx + hr * 0.5f, hy - hr * 0.1f))
-                    drawLine(Color(0x66000000), Offset(hx + hr * 0.3f, hy + hr * 0.42f), Offset(hx + hr * 0.62f, hy + hr * 0.38f), hr * 0.08f, StrokeCap.Round)
+                    val ex = hx + hr * 0.5f
+                    val ey = hy - hr * 0.12f - aimLook * hr * 0.08f
+                    if (!r.alive) {
+                        // Knocked out: X eyes
+                        val e = hr * 0.14f
+                        drawLine(OUTLINE_C, Offset(ex - e, ey - e), Offset(ex + e, ey + e), hr * 0.08f, StrokeCap.Round)
+                        drawLine(OUTLINE_C, Offset(ex - e, ey + e), Offset(ex + e, ey - e), hr * 0.08f, StrokeCap.Round)
+                    } else if ((r.time % 3.7f) < 0.12f || r.sinceHit < 0.2f) {
+                        drawLine(OUTLINE_C, Offset(ex - hr * 0.14f, ey), Offset(ex + hr * 0.14f, ey), hr * 0.07f, StrokeCap.Round)
+                    } else {
+                        drawOval(Color.White, Offset(ex - hr * 0.15f, ey - hr * 0.19f), Size(hr * 0.3f, hr * 0.38f))
+                        drawCircle(OUTLINE_C, hr * 0.1f, Offset(ex + hr * 0.05f, ey - aimLook * hr * 0.06f))
+                        drawCircle(Color.White, hr * 0.035f, Offset(ex + hr * 0.08f, ey - hr * 0.04f - aimLook * hr * 0.06f))
+                    }
+                    // Brow: frowning while drawing the bow
+                    val frown = r.draw * hr * 0.1f
+                    drawLine(HAIR_C, Offset(ex - hr * 0.18f, ey - hr * 0.3f - frown * 0.3f), Offset(ex + hr * 0.18f, ey - hr * 0.28f + frown), hr * 0.07f, StrokeCap.Round)
+                    // Nose and mouth
+                    drawCircle(Palette.darker(skin, 0.1f), hr * 0.1f, Offset(hx + hr * 0.92f, hy + hr * 0.1f))
+                    if (r.cheer) {
+                        drawArc(OUTLINE_C, 0f, 180f, true, Offset(hx + hr * 0.38f, hy + hr * 0.3f), Size(hr * 0.42f, hr * 0.3f))
+                    } else if (!r.alive || r.sinceHit < 0.4f) {
+                        drawOval(OUTLINE_C, Offset(hx + hr * 0.5f, hy + hr * 0.36f), Size(hr * 0.18f, hr * 0.2f))
+                    } else {
+                        drawLine(Color(0x88000000), Offset(hx + hr * 0.42f, hy + hr * 0.45f), Offset(hx + hr * 0.7f, hy + hr * 0.42f), hr * 0.07f, StrokeCap.Round)
+                    }
+                    drawCircle(Color(0x33F43F5E), hr * 0.14f, Offset(hx + hr * 0.3f, hy + hr * 0.25f))
                 }
                 drawHat(this, hat, hatC, o, hx, hy, hr)
             }
@@ -595,8 +852,10 @@ class ArcheryPainter {
         val acc = rgb(b.accent)
         // String point
         val drawing = r.alive && r.draw > 0.02f
-        val spx = if (drawing) sx(r.x[Ragdoll.L_HAND]) else (t1x + t2x) / 2f
-        val spy = if (drawing) sy(r.y[Ragdoll.L_HAND]) else (t1y + t2y) / 2f
+        // After the shot the string twangs back and forth for a moment.
+        val twang = if (!drawing && r.recoil > 0.04f) sin(r.time * 90f) * r.recoil * 0.07f * k else 0f
+        val spx = if (drawing) sx(r.x[Ragdoll.L_HAND]) else (t1x + t2x) / 2f + sdx * twang
+        val spy = if (drawing) sy(r.y[Ragdoll.L_HAND]) else (t1y + t2y) / 2f + sdy * twang
         val stringC = if (b.style == BowStyle.LASER) acc else Color(0xFFF1F5F9)
         if (b.style == BowStyle.LASER) {
             d.drawLine(acc.copy(alpha = 0.35f), Offset(t1x, t1y), Offset(spx, spy), 0.08f * k, StrokeCap.Round)
@@ -619,7 +878,9 @@ class ArcheryPainter {
             }
             else -> Unit
         }
+        d.drawPath(path, OUTLINE_C, style = bowOutline)
         d.drawPath(path, wood, style = bowStroke)
+        d.drawPath(path, Palette.lighter(wood, 0.35f).copy(alpha = 0.55f), style = thinStroke)
         when (b.style) {
             BowStyle.CRYSTAL, BowStyle.NEON -> d.drawPath(path, Color.White.copy(alpha = 0.7f), style = thinStroke)
             BowStyle.COMPOUND -> {
@@ -652,14 +913,20 @@ class ArcheryPainter {
         val tipX = x + dx * half; val tipY = y + dy * half
         val tailX = x - dx * half; val tailY = y - dy * half
         if (max(tipX, tailX) < -50f || min(tipX, tailX) > d.size.width + 50f) return
-        d.drawLine(Color(0xFF8B5A2B).copy(alpha = alpha), Offset(tailX, tailY), Offset(tipX, tipY), max(1.5f, 0.04f * k), StrokeCap.Round)
-        // Head
+        val sw = max(1.5f, 0.042f * k)
+        d.drawLine(OUTLINE_C.copy(alpha = alpha), Offset(tailX, tailY), Offset(tipX, tipY), sw + max(1.6f, 0.03f * k), StrokeCap.Round)
+        d.drawLine(Color(0xFF9A6332).copy(alpha = alpha), Offset(tailX, tailY), Offset(tipX, tipY), sw, StrokeCap.Round)
+        d.drawLine(Color(0xFFD9A066).copy(alpha = alpha * 0.8f), Offset(tailX - px * sw * 0.2f, tailY - py * sw * 0.2f), Offset(tipX - px * sw * 0.2f, tipY - py * sw * 0.2f), sw * 0.35f)
+        // Head (steel, with a bright edge)
         path.reset()
-        path.moveTo(tipX + dx * 0.11f * k, tipY + dy * 0.11f * k)
-        path.lineTo(tipX + px * 0.055f * k, tipY + py * 0.055f * k)
-        path.lineTo(tipX - px * 0.055f * k, tipY - py * 0.055f * k)
+        path.moveTo(tipX + dx * 0.13f * k, tipY + dy * 0.13f * k)
+        path.lineTo(tipX + px * 0.06f * k - dx * 0.01f * k, tipY + py * 0.06f * k - dy * 0.01f * k)
+        path.lineTo(tipX + dx * 0.02f * k, tipY + dy * 0.02f * k)
+        path.lineTo(tipX - px * 0.06f * k - dx * 0.01f * k, tipY - py * 0.06f * k - dy * 0.01f * k)
         path.close()
-        d.drawPath(path, Color(0xFFD1D5DB).copy(alpha = alpha))
+        d.drawPath(path, OUTLINE_C.copy(alpha = alpha), style = thinStroke)
+        d.drawPath(path, Color(0xFF94A3B8).copy(alpha = alpha))
+        d.drawLine(Color.White.copy(alpha = alpha * 0.8f), Offset(tipX + dx * 0.12f * k, tipY + dy * 0.12f * k), Offset(tipX + px * 0.045f * k, tipY + py * 0.045f * k), max(1f, 0.012f * k))
         // Fletching
         val fc = if (byPlayer) rgb(b.trail) else Color(0xFFEF4444)
         for (s in -1..1 step 2) {
@@ -725,8 +992,8 @@ class ArcheryPainter {
 
     private fun hpBar(d: DrawScope, r: Ragdoll, hp: Int, maxHp: Int, color: Color, myTurn: Boolean, clock: Float, shields: Int) {
         if (!r.alive && hp <= 0) return
-        val bw = 1.05f * k
-        val bh = 0.13f * k
+        val bw = max(1.05f * k, d.size.width * 0.12f)
+        val bh = max(0.13f * k, d.size.width * 0.016f)
         val x = sx(r.rootX) - bw / 2f
         val y = sy(r.rootY + 2.3f)
         if (x > d.size.width || x + bw < 0f) return
@@ -781,8 +1048,13 @@ class ArcheryPainter {
 
     companion object {
         const val AIR = 40
+        const val OUTLINE = 0.026f
+        val OUTLINE_C = Color(0xFF1A1226)
+        val HAIR_C = Color(0xFF3B2416)
+        val QUIVER_FLETCH = arrayOf(Color(0xFFF8FAFC), Color(0xFFEF4444), Color(0xFFFACC15))
         const val TRAIL = 22
         const val HEADSHOT = "HEADSHOT!"
         private fun frac(v: Float) = v - floor(v)
+        private const val PI_F = 3.1415927f
     }
 }

@@ -41,6 +41,14 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
     private var slowUntil = -1f
     var shake = 0f
         private set
+    /** White flash on a headshot kill (1 → 0). */
+    var flash = 0f
+        private set
+    /** "Panorama": the camera pulls back to show both archers. */
+    var overview = false
+    /** Opening pan: the camera starts on the enemy, then glides to the player. */
+    private var introUntil = -1f
+    val inIntro: Boolean get() = clock < introUntil
 
     val particles = Particles(900)
     val texts = ArrayList<WorldText>()
@@ -98,8 +106,20 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         aiming = false
         aimPower = 0f
         overWait = -1f
+        flash = 0f
+        overview = false
         camX = d.player.rootX + VIEW_W * 0.28f
         camY = d.player.rootY + 1.6f
+        viewW = VIEW_W
+        if (mode == Mode.PLAY) {
+            // Start on the enemy, a little wide, then glide back to the player.
+            camX = d.enemy.rootX - VIEW_W * 0.2f
+            camY = d.enemy.rootY + 1.6f
+            viewW = VIEW_W * 1.15f
+            introUntil = clock + 1.1f
+        } else {
+            introUntil = -1f
+        }
     }
 
     // ------------------------------------------------------------------ input (player turn)
@@ -145,9 +165,12 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
             handle(events)
             left -= h
         }
+        dust(duel.player)
+        dust(duel.enemy)
         particles.update(dt)
         texts.removeAll { clock - it.born > 1.4f }
         shake *= exp(-rd * 8f)
+        flash *= exp(-rd * 5f)
         updateCamera(rd)
         if (mode == Mode.DEMO && duel.finished) {
             if (overWait < 0f) overWait = clock
@@ -173,6 +196,15 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         }
     }
 
+    /** A puff of dust when a falling body slams into the ground. */
+    private fun dust(r: Ragdoll) {
+        if (r.thud > 0.035f) {
+            burst(r.thudX, r.thudY + 0.05f, (10 + r.thud * 300).toInt().coerceAtMost(30), DUST, 1.5f + r.thud * 30f)
+            shake = max(shake, (r.thud * 6f).coerceAtMost(0.35f))
+        }
+        r.thud = 0f
+    }
+
     private fun updateCamera(dt: Float) {
         val d = duel
         val a = d.flying
@@ -180,6 +212,20 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         var ty: Float
         var tw = VIEW_W
         when {
+            overview && d.turn != Duel.Turn.OVER -> {
+                // Both archers in view (the arrow too, it's always between them or near).
+                val x0 = min(d.player.rootX, d.enemy.rootX)
+                val x1 = max(d.player.rootX, d.enemy.rootX)
+                tx = (x0 + x1) / 2f
+                ty = (d.player.rootY + d.enemy.rootY) / 2f + 1.4f
+                tw = (x1 - x0) + 7f
+                if (a != null && (a.x < x0 - 3f || a.x > x1 + 3f)) tx = a.x.coerceIn(x0 - 6f, x1 + 6f)
+            }
+            clock < introUntil -> {
+                tx = d.enemy.rootX - VIEW_W * 0.2f
+                ty = d.enemy.rootY + 1.6f
+                tw = VIEW_W * 1.15f
+            }
             a != null -> {
                 // Follow the arrow, a bit ahead of it.
                 tx = a.x + a.vx * 0.12f
@@ -201,10 +247,14 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
             }
         }
         if (slow > 0.05f && d.turn == Duel.Turn.OVER) tw = VIEW_W * (1f - 0.3f * slow)
-        val k = if (a != null) min(1f, dt * 9f) else min(1f, dt * 3.2f)
+        val k = when {
+            overview -> min(1f, dt * 4f)
+            a != null -> min(1f, dt * 9f)
+            else -> min(1f, dt * 3.2f)
+        }
         camX += (tx - camX) * k
         camY += (ty - camY) * k
-        viewW += (tw - viewW) * min(1f, dt * 4f)
+        viewW += (tw - viewW) * min(1f, dt * if (overview) 3.5f else 4f)
     }
 
     // ------------------------------------------------------------------ events → effects
@@ -217,7 +267,10 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
                     burst(e.x, e.y, if (e.kill) 60 else 26, c, if (e.kill) 6f else 4f)
                     shake = max(shake, if (e.kill) 0.5f else 0.25f)
                     texts.add(WorldText("-${e.damage}", e.x, e.y + 0.4f, if (e.part == Part.HEAD) 1 else 0, clock))
-                    if (e.part == Part.HEAD && e.damage >= 100) texts.add(WorldText("HEADSHOT", e.x, e.y + 0.9f, 2, clock))
+                    if (e.part == Part.HEAD && e.damage >= 100) {
+                        texts.add(WorldText("HEADSHOT", e.x, e.y + 0.9f, 2, clock))
+                        flash = 1f
+                    }
                     if (e.kill || (e.part == Part.HEAD && e.byPlayer)) {
                         slowUntil = clock + if (e.kill) 1.3f else 0.6f
                     }

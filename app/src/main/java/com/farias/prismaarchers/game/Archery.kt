@@ -64,6 +64,17 @@ class Ragdoll(var rootX: Float, var rootY: Float, val facing: Float) {
     /** Seconds since the last hit (for the flinch). */
     var sinceHit = 9f
     private var settledTime = 0f
+    /** Seconds alive (breathing, idle sway). */
+    var time = 0f
+        private set
+    /** 1 right after a shot, decays to 0: bow arm kicks, string hand follows through. */
+    var recoil = 0f
+    /** The winner raises the bow. */
+    var cheer = false
+    /** Strongest landing impact since last read (for dust); [thudX]/[thudY] where. */
+    var thud = 0f
+    var thudX = 0f
+    var thudY = 0f
 
     init {
         buildPose()
@@ -77,20 +88,34 @@ class Ragdoll(var rootX: Float, var rootY: Float, val facing: Float) {
     private fun buildPose() {
         val f = facing
         fun set(i: Int, dx: Float, dy: Float) { poseX[i] = rootX + dx * f; poseY[i] = rootY + dy }
-        val breathe = 0f
-        set(L_FOOT, -0.17f, 0f); set(R_FOOT, 0.2f, 0f)
-        set(L_KNEE, -0.1f, 0.45f); set(R_KNEE, 0.14f, 0.45f)
-        set(PELVIS, 0f, 0.9f)
-        set(CHEST, 0.02f, 1.24f + breathe)
-        set(NECK, 0.03f, 1.52f + breathe)
-        set(HEAD, 0.05f, 1.74f + breathe)
-        // Front arm holds the bow along the aim; back arm draws the string.
+        // Breathing and a slow weight shift; a little crouch while drawing hard.
+        val breathe = sin(time * 2.3f) * 0.014f
+        val sway = sin(time * 0.9f) * 0.012f
+        val crouch = 0.05f * draw
+        val hop = if (cheer) abs(sin(time * 7f)) * 0.12f else 0f
+        set(L_FOOT, -0.17f, hop); set(R_FOOT, 0.2f, hop)
+        set(L_KNEE, -0.1f + sway, 0.45f - crouch + hop); set(R_KNEE, 0.15f + sway, 0.45f - crouch + hop)
+        set(PELVIS, sway, 0.9f - crouch + hop)
+        set(CHEST, 0.02f + sway - 0.03f * draw, 1.24f + breathe - crouch + hop)
+        set(NECK, 0.03f + sway - 0.03f * draw, 1.52f + breathe - crouch + hop)
+        if (cheer) {
+            // Victory: bow raised high, other fist pumping.
+            val pump = sin(time * 7f) * 0.08f
+            set(HEAD, 0.04f + sway, 1.75f + breathe + hop)
+            set(R_ELBOW, 0.18f, 1.78f + hop); set(R_HAND, 0.24f, 2.1f + hop)
+            set(L_ELBOW, -0.2f, 1.72f + hop + pump); set(L_HAND, -0.26f, 2.0f + hop + pump * 1.5f)
+            return
+        }
         val ca = cos(aim); val sa = sin(aim)
-        set(R_ELBOW, 0.03f + ca * 0.3f, 1.47f + sa * 0.3f)
-        set(R_HAND, 0.03f + ca * 0.58f, 1.47f + sa * 0.58f)
-        val pull = 0.58f - 0.5f * draw
-        set(L_HAND, 0.03f + ca * pull, 1.47f + sa * pull)
-        set(L_ELBOW, 0.03f + ca * pull * 0.5f - sa * 0.18f * draw - 0.12f * (1 - draw), 1.47f + sa * pull * 0.5f + ca * 0.18f * draw - 0.1f * (1 - draw))
+        // The head leans into the aim, cheek near the string.
+        set(HEAD, 0.05f + sway + ca * 0.02f - 0.03f * draw, 1.74f + breathe - crouch + sa * 0.05f)
+        // Front arm holds the bow along the aim (kicks back a bit on release); back arm draws the string.
+        val reach = 0.58f - 0.07f * recoil
+        set(R_ELBOW, 0.03f + sway + ca * 0.3f, 1.47f - crouch + sa * 0.3f)
+        set(R_HAND, 0.03f + sway + ca * reach, 1.47f - crouch + sa * reach)
+        val pull = (0.58f - 0.5f * draw - 0.62f * recoil).coerceAtLeast(-0.12f)
+        set(L_HAND, 0.03f + sway + ca * pull - sa * 0.05f * recoil, 1.47f - crouch + sa * pull + 0.08f * recoil)
+        set(L_ELBOW, 0.03f + sway + ca * pull * 0.5f - sa * 0.18f * draw - 0.12f * (1 - draw), 1.47f - crouch + sa * pull * 0.5f + ca * 0.18f * draw - 0.1f * (1 - draw) + 0.06f * recoil)
     }
 
     /** Pushes the point nearest to the hit and the ones around it. */
@@ -113,6 +138,7 @@ class Ragdoll(var rootX: Float, var rootY: Float, val facing: Float) {
     /** Back on its feet at the root (rewarded "continue"). */
     fun revive() {
         alive = true
+        cheer = false
         sinceHit = 9f
         buildPose()
         for (i in 0 until N) { x[i] = poseX[i]; y[i] = poseY[i]; px[i] = x[i]; py[i] = y[i] }
@@ -120,6 +146,8 @@ class Ragdoll(var rootX: Float, var rootY: Float, val facing: Float) {
 
     fun step(dt: Float, platforms: List<Platform>) {
         sinceHit += dt
+        time += dt
+        recoil *= exp(-dt * 7f)
         if (alive) {
             buildPose()
             // Springs back to the pose: soft right after a hit (a flinch), then firm.
@@ -176,6 +204,8 @@ class Ragdoll(var rootX: Float, var rootY: Float, val facing: Float) {
                 val bottom = y[i] - r
                 if (bottom < p.top && py[i] - r >= p.top - 0.3f && y[i] > p.top - p.depth) {
                     // Land on top with friction.
+                    val impact = py[i] - y[i]
+                    if (impact > thud && (i == PELVIS || i == HEAD || i == CHEST)) { thud = impact; thudX = x[i]; thudY = p.top }
                     y[i] = p.top + r
                     val vx = x[i] - px[i]
                     px[i] = x[i] - vx * 0.6f
@@ -262,6 +292,8 @@ class Arrow(var x: Float, var y: Float, var vx: Float, var vy: Float, val byPlay
     var along = 0.5f
     var relAngle = 0f
     var depth = 0f
+    /** Duel time when it stuck (for the quiver), -1 while flying. */
+    var stuckTime = -1f
 }
 
 /** Something that happened, for sounds, effects and the UI. */
@@ -380,6 +412,7 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
         val speed = MIN_SPEED + (MAX_SPEED - MIN_SPEED) * power.coerceIn(0f, 1f)
         val dir = r.facing
         val a = Arrow(r.bowX(), r.bowY(), cos(aim) * speed * dir, sin(aim) * speed, byPlayer, kind)
+        r.recoil = 1f
         arrows.add(a)
         if (arrows.size > 24) arrows.removeAt(0)
         flying = a
@@ -391,6 +424,7 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
         if (turn != Turn.OVER || playerWon) return
         playerHp = hp
         player.revive()
+        enemy.cheer = false
         arrows.removeAll { it.stuckIn === player }
         flying = null
         finished = false
@@ -491,6 +525,7 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
         for (p in platforms) {
             if (p.contains(tipX, tipY)) {
                 a.flying = false
+                a.stuckTime = time
                 events.add(DuelEvent.Miss(a.byPlayer, tipX, tipY, true))
                 endFlight(a, false, events)
                 return
@@ -505,6 +540,7 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
 
     private fun stick(a: Arrow, body: Ragdoll, bone: Int, hx: Float, hy: Float) {
         a.flying = false
+        a.stuckTime = time
         a.stuckIn = body
         a.bone = bone
         val b = Ragdoll.BONES[bone]
@@ -522,6 +558,7 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
         flying = null
         if (kill) {
             playerWon = a.byPlayer
+            (if (a.byPlayer) player else enemy).cheer = true
             turn = Turn.OVER
             overTime = 0f
             return
