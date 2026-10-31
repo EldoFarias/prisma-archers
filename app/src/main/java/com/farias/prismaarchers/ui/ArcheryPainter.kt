@@ -251,7 +251,7 @@ class ArcheryPainter {
         // Helmet knocked off
         if (g.helmet.active) helmetDebris(d, g.helmet)
         // Whatever fell into the water/lava is under its surface
-        liquidFront(d, duel.groundY, world, g.clock)
+        liquidFront(d, duel.groundY, world, g.clock, g, duel)
         // Aim guide
         if (g.aiming && g.aimPower > 0.04f && duel.turn == Duel.Turn.PLAYER) {
             val n = g.guide(guide)
@@ -386,7 +386,7 @@ class ArcheryPainter {
             val kind = rec.aKind[q]
             drawArrow(d, rec.ax[q], rec.ay[q], rec.aa[q], kind >= 0, if (kind >= 0) host.playerBow else host.enemyBow, 1f, max(0, kind), clock)
         }
-        liquidFront(d, rd.groundY, world, clock)
+        liquidFront(d, rd.groundY, world, clock, null, rd)
     }
 
     // ------------------------------------------------------------------ battle extras
@@ -787,6 +787,8 @@ class ArcheryPainter {
         val h = d.size.height
         val bottom = min(h + 4f, sy(groundY) + 4f)
         val heightM = top - groundY
+        // Standing right on the ground: no tower.
+        if (heightM < 0.15f) return
         val spread = when (world.base) { TowerStyle.MOUNTAIN -> 0.5f; TowerStyle.CLIFF -> 0.2f; TowerStyle.MESA -> 0.08f; else -> 0f } * heightM
         if (r + spread * k < 0f || l - spread * k > d.size.width || t > h) return
         val ol = max(2f, OUTLINE * k * 1.6f)
@@ -1027,18 +1029,32 @@ class ArcheryPainter {
         val x1w = camX + (w / 2f) / k
         when (world.ground) {
             GroundStyle.SEA -> {
-                d.drawRect(Color(0xFF0E7490), Offset(0f, gy), Size(w, h - gy + 2f))
-                d.drawRect(Color(0xFF0369A1).copy(alpha = 0.6f), Offset(0f, gy + 1.5f * k), Size(w, h))
-                d.drawRect(Color(0xFF38BDF8).copy(alpha = 0.55f), Offset(0f, gy), Size(w, 0.45f * k))
+                // Depth: bands from turquoise at the surface to deep blue
+                for (i in 0 until 6) {
+                    val top = gy + i * i * 0.35f * k
+                    if (top > h) break
+                    d.drawRect(SEA_BANDS[i], Offset(0f, top), Size(w, h - top + 2f))
+                }
+                // Sun glitter: a column of shimmering streaks under the sun
+                val sx0 = sunPos.x
+                for (i in 0 until 14) {
+                    val yy = gy + (0.35f + i * 0.32f + i * i * 0.02f) * k
+                    if (yy > h) break
+                    val wob = sin(clock * 3f + i * 1.7f)
+                    val len = (0.5f + 0.9f * ((i * 37) % 5) / 5f) * k * (1f - i / 16f)
+                    d.drawLine(Color.White.copy(alpha = (0.35f + 0.25f * wob) * (1f - i / 15f)), Offset(sx0 - len + wob * 0.3f * k, yy), Offset(sx0 + len + wob * 0.3f * k, yy), max(1.5f, 0.06f * k), StrokeCap.Round)
+                }
+                // Back swell (long, slow waves)
+                wave(d, gy - 0.05f * k, 0.12f, 0.45f, -0.9f, clock, Color(0xFF155E75), w, h, false)
                 // A sailboat passing far out
-                val bxw = groundY.let { -40f + ((clock * 0.9f) % 120f) }
+                val bxw = -40f + ((clock * 0.9f) % 120f)
                 if (bxw in x0w - 4f..x1w + 4f) boat(d, sx(bxw), gy + 0.05f * k, clock)
-                // Glints
+                // Glints on the waves
                 var xx = floor(x0w / 2.3f) * 2.3f
                 var i = 0
                 while (xx < x1w + 2f) {
                     val ph = sin(clock * 2f + xx * 1.3f)
-                    if (ph > 0f) d.drawLine(Color.White.copy(alpha = 0.35f * ph), Offset(sx(xx), gy + (0.7f + (i % 3) * 0.6f) * k), Offset(sx(xx + 0.6f), gy + (0.7f + (i % 3) * 0.6f) * k), max(1.5f, 0.05f * k), StrokeCap.Round)
+                    if (ph > 0f) d.drawLine(Color.White.copy(alpha = 0.3f * ph), Offset(sx(xx), gy + (0.7f + (i % 3) * 0.6f) * k), Offset(sx(xx + 0.6f), gy + (0.7f + (i % 3) * 0.6f) * k), max(1.5f, 0.05f * k), StrokeCap.Round)
                     xx += 2.3f
                     i++
                 }
@@ -1100,8 +1116,8 @@ class ArcheryPainter {
         // A soft shadow where each tower meets the ground
     }
 
-    /** Water/lava in front of whatever fell in (drawn after the bodies). */
-    private fun liquidFront(d: DrawScope, groundY: Float, world: World, clock: Float) {
+    /** Water/lava in front of whatever fell in (drawn after the bodies): the deeper, the less you see. */
+    private fun liquidFront(d: DrawScope, groundY: Float, world: World, clock: Float, game: com.farias.prismaarchers.game.ArcheryGame? = null, duel: Duel? = null) {
         if (!GroundStyle.liquid(world.ground)) return
         val w = d.size.width
         val h = d.size.height
@@ -1109,20 +1125,64 @@ class ArcheryPainter {
         if (gy > h + 2f) return
         val lava = world.ground == GroundStyle.LAVA
         val c = if (lava) Color(0xFFEA580C) else Color(0xFF0E7490)
-        d.drawRect(c.copy(alpha = 0.72f), Offset(0f, gy + 0.18f * k), Size(w, h - gy))
-        // Wave crest
+        // Translucent near the surface, opaque further down
+        d.drawRect(c.copy(alpha = if (lava) 0.6f else 0.32f), Offset(0f, gy + 0.12f * k), Size(w, h - gy))
+        d.drawRect(c.copy(alpha = if (lava) 0.5f else 0.3f), Offset(0f, gy + 0.7f * k), Size(w, h - gy))
+        d.drawRect((if (lava) Color(0xFF7C2D12) else Color(0xFF0C4A6E)).copy(alpha = 0.55f), Offset(0f, gy + 1.6f * k), Size(w, h - gy))
+        // Foam where the towers meet the water
+        if (duel != null) {
+            for (q in 0..1) {
+                val p = duel.platforms[q]
+                if (p.top - groundY < 0.15f) continue
+                val spread = when (world.base) { TowerStyle.MOUNTAIN -> 0.5f; TowerStyle.CLIFF -> 0.2f; TowerStyle.MESA -> 0.08f; else -> 0f } * (p.top - groundY)
+                for (e in 0..1) {
+                    val fx = if (e == 0) p.x0 - spread else p.x1 + spread
+                    for (j in 0 until 4) {
+                        val ph = sin(clock * 3f + j * 1.9f + q * 2f + e)
+                        val ox = (if (e == 0) -1f else 1f) * (0.15f + j * 0.22f + ph * 0.06f)
+                        d.drawCircle(Color.White.copy(alpha = 0.7f - j * 0.14f), (0.16f - j * 0.025f + ph * 0.02f) * k, Offset(sx(fx + ox), gy + 0.12f * k))
+                    }
+                }
+            }
+        }
+        // Ripples from splashes: flat rings growing on the surface
+        if (game != null) {
+            val rp = game.ripples
+            for (i in 0 until com.farias.prismaarchers.game.ArcheryGame.RIPPLES) {
+                val age = game.clock - rp[i * 3 + 1]
+                if (age < 0f || age > 2.2f) continue
+                val st = rp[i * 3 + 2]
+                val rx = (0.3f + age * 2.4f) * st * k
+                val a = (1f - age / 2.2f) * 0.8f
+                val cx = sx(rp[i * 3])
+                d.drawOval(Color.White.copy(alpha = a), Offset(cx - rx, gy - rx * 0.12f + 0.1f * k), Size(rx * 2f, rx * 0.24f), style = thinStroke)
+                if (age > 0.25f) {
+                    val r2 = rx * 0.6f
+                    d.drawOval(Color.White.copy(alpha = a * 0.6f), Offset(cx - r2, gy - r2 * 0.12f + 0.1f * k), Size(r2 * 2f, r2 * 0.24f), style = thinStroke)
+                }
+            }
+        }
+        // Front crests: two layers moving in opposite directions
+        wave(d, gy, 0.1f, 0.62f, 1.2f, clock, if (lava) Color(0xFFF97316) else Color(0xFF22A6C9), w, h, false)
+        wave(d, gy + 0.02f * k, 0.07f, 1.05f, -2f, clock, if (lava) Color(0xFFFDE047).copy(alpha = 0.85f) else Color(0xFFBAE6FD).copy(alpha = 0.9f), w, h, false)
+    }
+
+    /** A wavy band along the surface: amplitude [amp] (m), wave number [freq], speed [speed]. */
+    private fun wave(d: DrawScope, gy: Float, amp: Float, freq: Float, speed: Float, clock: Float, c: Color, w: Float, h: Float, fillDown: Boolean) {
         path2.reset()
-        val step = w / 24f
-        path2.moveTo(0f, gy + 0.3f * k)
-        var x = 0f
+        val step = w / 28f
+        path2.moveTo(-step, gy + 0.3f * k)
+        var x = -step
         while (x <= w + step) {
-            val wx = (x - (w / 2f)) / k + camX
-            path2.lineTo(x, gy + (0.1f + 0.1f * sin(wx * 1.6f + clock * 2.4f)) * k)
+            val wx = (x - cx) / k + camX
+            val y = gy + (amp * sin(wx * freq + clock * speed) + amp * 0.4f * sin(wx * freq * 2.3f - clock * speed * 1.3f)) * k
+            path2.lineTo(x, y)
             x += step
         }
-        path2.lineTo(w, gy + 0.35f * k)
+        path2.lineTo(w + step, if (fillDown) h + 2f else gy + 0.28f * k)
+        path2.lineTo(-step, if (fillDown) h + 2f else gy + 0.28f * k)
         path2.close()
-        d.drawPath(path2, if (lava) Color(0xFFFDE047).copy(alpha = 0.8f) else Color(0xFFBAE6FD).copy(alpha = 0.85f))
+        d.drawPath(path2, c)
     }
 
     private fun boat(d: DrawScope, x: Float, y: Float, clock: Float) {
@@ -1773,6 +1833,7 @@ class ArcheryPainter {
         const val FIRE_TRAIL = 100
         val OUTLINE_C = Color(0xFF1A1226)
         val HAIR_C = Color(0xFF3B2416)
+        val SEA_BANDS = arrayOf(Color(0xFF22A6C9), Color(0xFF168AAE), Color(0xFF0E7490), Color(0xFF0B5F7D), Color(0xFF0A4A68), Color(0xFF083A55))
         val CAR_COLORS = arrayOf(Color(0xFFEF4444), Color(0xFF3B82F6), Color(0xFFFACC15), Color(0xFF10B981), Color(0xFFF8FAFC))
         val BALLOONS = arrayOf(Color(0xFFF43F5E), Color(0xFFFACC15), Color(0xFF38BDF8), Color(0xFFA78BFA), Color(0xFF34D399), Color(0xFFFB923C), Color(0xFFF472B6), Color(0xFFE11D48), Color(0xFF22D3EE), Color(0xFF84CC16))
         val QUIVER_FLETCH = arrayOf(Color(0xFFF8FAFC), Color(0xFFEF4444), Color(0xFFFACC15))

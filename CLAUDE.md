@@ -44,8 +44,12 @@ sem outras redes, sem assinatura, sem compras no app.
 - Chefes com habilidade (`BossPower`, pela armadura): cavaleiro = bolha que aguenta 2 acertos, samurai = mira melhor,
   viking = 2 flechas, rei = se cura a cada turno.
 - Torres com base: cada mundo tem `World.base` (`TowerStyle`: penhasco, mesa, montanha, prédio, castelo, pedra) e
-  `World.ground` (`GroundStyle`: mar, rua com carros, lava, areia, neve, grama) `GROUND_DEPTH` (10 m) abaixo da torre
-  mais baixa; o chão é a 3ª plataforma do `Duel` (flechas e corpos caem nele; no mar/lava afundam).
+  `World.ground` (`GroundStyle`: mar, rua com carros, lava, areia, neve, grama); o chão é a 3ª plataforma do `Duel`.
+- Posições variadas por fase (`LevelSpec.playerH`/`enemyH`, altura de cada plataforma acima do chão): torres de alturas
+  diferentes, um arqueiro no chão e o outro no alto, ou os dois embaixo (a diferença cresce com a fase). Sobre água/lava
+  (`Duel.liquid`), quem está "no chão" fica numa pedra baixa (`LOW_ROCK`). Largura das plataformas também varia.
+- Água/lava: o chão não é sólido; corpo que cai espirra (`ArcheryGame.splash`: gotas, coluna, névoa, ondas circulares
+  `ripples`), freia e afunda devagar (`Ragdoll.waterY`), com bolhas; a água da frente esconde o corpo aos poucos.
 - Câmera do golpe final: segue a flecha até o impacto e acaba `KILL_CAM_AFTER` (1,3 s) depois, sempre no corpo.
 - Sobrevivência (`GameHost.playEndless`): um inimigo atrás do outro (`survivalSpec(k)`), +25 de vida entre eles;
   recorde em `Progress.bestEndless` (inimigos derrotados).

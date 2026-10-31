@@ -75,6 +75,14 @@ class Ragdoll(var rootX: Float, var rootY: Float, val facing: Float) {
     var thud = 0f
     var thudX = 0f
     var thudY = 0f
+    /** Water/lava surface height (NaN = solid ground): below it the body is slowed and sinks slowly. */
+    var waterY = Float.NaN
+    /** Strongest entry into the water since last read (for the splash), and where. */
+    var splash = 0f
+    var splashX = 0f
+    /** Seconds the pelvis has been under the surface. */
+    var underwater = 0f
+        private set
 
     init {
         buildPose()
@@ -160,13 +168,24 @@ class Ragdoll(var rootX: Float, var rootY: Float, val facing: Float) {
                 y[i] += vy + (poseY[i] - y[i]) * k
             }
         } else {
+            val wy = waterY
             for (i in 0 until N) {
-                val vx = (x[i] - px[i]) * 0.995f
-                val vy = (y[i] - py[i]) * 0.995f
+                val under = !wy.isNaN() && y[i] < wy
+                // Water: strong drag and a much weaker pull (it sinks slowly, drifting a little).
+                val damp = if (under) 0.95f else 0.995f
+                val g = if (under) GRAVITY * 0.3f else GRAVITY
+                val vx = (x[i] - px[i]) * damp
+                val vy = (y[i] - py[i]) * damp
+                val before = y[i]
                 px[i] = x[i]; py[i] = y[i]
-                x[i] += vx
-                y[i] += vy - GRAVITY * dt * dt
+                x[i] += vx + (if (under) sin(time * 1.3f + i) * 0.0004f else 0f)
+                y[i] += vy - g * dt * dt
+                if (!wy.isNaN() && before >= wy && y[i] < wy && (i == PELVIS || i == CHEST || i == HEAD)) {
+                    val sp = before - y[i]
+                    if (sp > splash) { splash = sp; splashX = x[i] }
+                }
             }
+            if (!wy.isNaN() && y[PELVIS] < wy) underwater += dt else underwater = 0f
             repeat(6) { solveBones() }
             collide(platforms)
         }
@@ -353,6 +372,9 @@ class LevelSpec(
     val boss: Boolean,
     val seed: Long,
     val power: Int = BossPower.NONE,
+    /** Height of the player's and the enemy's platform above the ground (0 = standing on the ground). */
+    val playerH: Float = 9f,
+    val enemyH: Float = 9f,
 )
 
 object Levels {
@@ -374,13 +396,26 @@ object Levels {
         val boss = isBoss(n)
         val power = bossPower(n)
         val distance = 13f + 14f * d + rnd.nextFloat() * (4f + 6f * d)
-        val heightDiff = (rnd.nextFloat() * 2f - 1f) * (0.5f + 4f * d)
+        rnd.nextFloat() // (kept so the rest of the level stays the same)
         val wind = if (n < WIND_FROM) 0f else (rnd.nextFloat() * 2f - 1f) * (0.6f + 3.2f * d)
         var hp = if (boss) 150 + n else 100 + (n / 5) * 5
         if (power == BossPower.SHIELD || power == BossPower.HEAL) hp -= 30 else if (boss) hp -= 25
         // 0 = clumsy, 1 = deadly. Bosses aim better.
         val skill = (0.15f + 0.7f * d + if (boss) 0.05f else 0f).coerceAtMost(0.9f)
-        return LevelSpec(n, distance, heightDiff, wind, hp, boss || n >= 25 && rnd.nextFloat() < 0.25f, skill, boss, n * 131L + salt, power)
+        val helmet = boss || n >= 25 && rnd.nextFloat() < 0.25f
+        // Where the archers stand: towers of different heights, one of them on the ground, or both low.
+        val maxDiff = 2.5f + 9f * d
+        val layout = rnd.nextFloat()
+        val playerH: Float
+        val enemyH: Float
+        when {
+            n <= 3 -> { playerH = 7f + rnd.nextFloat() * 2f; enemyH = playerH + (rnd.nextFloat() * 2f - 1f) * 0.8f }
+            layout < 0.45f -> { playerH = 5f + rnd.nextFloat() * 7f; enemyH = (playerH + (rnd.nextFloat() * 2f - 1f) * maxDiff).coerceIn(3f, 14f) }
+            layout < 0.65f -> { playerH = 0f; enemyH = min(4f + rnd.nextFloat() * 8f, maxDiff) }
+            layout < 0.85f -> { enemyH = 0f; playerH = min(4f + rnd.nextFloat() * 8f, maxDiff) }
+            else -> { playerH = 0f; enemyH = rnd.nextFloat() * min(2.5f, maxDiff) }
+        }
+        return LevelSpec(n, distance, enemyH - playerH, wind, hp, helmet, skill, boss, n * 131L + salt, power, playerH, enemyH)
     }
 
     fun daily(day: Int): LevelSpec = level(30 + day % 40, salt = day * 2_654_435_761L)
@@ -394,9 +429,11 @@ object Levels {
 class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nanoTime()) {
     enum class Turn { PLAYER, PLAYER_ARROW, ENEMY, ENEMY_ARROW, OVER }
 
-    val platforms: List<Platform>
+    var platforms: List<Platform>
+        private set
     /** Height of the ground below the two towers. */
-    val groundY: Float
+    var groundY: Float
+        private set
     val player: Ragdoll
     val enemy: Ragdoll
     var enemyHp = spec.enemyHp
@@ -436,21 +473,52 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
         private set
     private var killed = false
     private var killByPlayer = false
+    /**
+     * Water or lava below: arrows and bodies go through the ground and sink. An archer "on the ground" then
+     * stands on a low rock ([LOW_ROCK] above the surface). Set right after creating the duel.
+     */
+    var liquid = false
+        set(v) {
+            field = v
+            buildGround()
+        }
+    private lateinit var towers: List<Platform>
+    private val pX0: Float
+    private val pX1: Float
+    private val eX0: Float
+    private val eX1: Float
 
     init {
         val ex = spec.distance
         val ey = spec.heightDiff
-        groundY = min(0f, ey) - GROUND_DEPTH
-        platforms = listOf(
-            Platform(-3.5f, 1.2f, 0f),
-            Platform(ex - 1.2f, ex + 3.5f, ey),
-            // The ground (street, sea, sand…) far below: arrows and fallen bodies end up there.
-            Platform(-80f, ex + 80f, groundY, 60f),
-        )
+        // Platform widths vary a little from duel to duel.
+        val wr = Random(spec.seed * 31 + 7)
+        pX0 = -(2.2f + wr.nextFloat() * 1.8f)
+        pX1 = 0.9f + wr.nextFloat() * 0.6f
+        eX0 = ex - (0.9f + wr.nextFloat() * 0.6f)
+        eX1 = ex + 2.2f + wr.nextFloat() * 1.8f
+        groundY = -spec.playerH
+        platforms = emptyList()
+        buildGround()
         player = Ragdoll(0f, 0f, 1f)
         enemy = Ragdoll(ex, ey, -1f)
         player.aim = 0.3f
         enemy.aim = 0.3f
+    }
+
+    /** The two archers' platforms and the ground under them (lower when it's water, see [liquid]). */
+    private fun buildGround() {
+        val ex = spec.distance
+        val ey = spec.heightDiff
+        val lowest = min(spec.playerH, spec.enemyH)
+        groundY = -spec.playerH - if (liquid) max(0f, LOW_ROCK - lowest) else 0f
+        platforms = listOf(
+            Platform(pX0, pX1, 0f),
+            Platform(eX0, eX1, ey),
+            // The ground (street, sea, sand…) below: arrows and fallen bodies end up there.
+            Platform(-80f, ex + 80f, groundY, 60f),
+        )
+        towers = platforms.subList(0, 2)
     }
 
     // ------------------------------------------------------------------ player input
@@ -512,8 +580,12 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
 
     fun step(dt: Float, events: MutableList<DuelEvent>) {
         time += dt
-        player.step(dt, platforms)
-        enemy.step(dt, platforms)
+        val solid = if (liquid) towers else platforms
+        val wy = if (liquid) groundY else Float.NaN
+        player.waterY = wy
+        enemy.waterY = wy
+        player.step(dt, solid)
+        enemy.step(dt, solid)
         var i = inFlight.size - 1
         while (i >= 0) {
             if (i < inFlight.size) stepArrow(inFlight[i], dt, events)
@@ -540,7 +612,10 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
             Turn.OVER -> {
                 overTime += dt
                 val loser = if (playerWon) enemy else player
-                if (!finished && (loser.settled(dt) || overTime > 2.2f)) {
+                // A body that fell into the water: let it splash and start sinking before the panel.
+                val done = if (liquid && loser.underwater > 0f) loser.underwater > 1.6f
+                else loser.settled(dt) || overTime > (if (liquid && loser.y[Ragdoll.PELVIS] > groundY) 3.5f else 2.2f)
+                if (!finished && done) {
                     finished = true
                     events.add(DuelEvent.Over(playerWon))
                 }
@@ -656,6 +731,14 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
         // Platform or out of the world
         for (p in platforms) {
             if (p.contains(tipX, tipY)) {
+                if (liquid && p !== platforms[0] && p !== platforms[1]) {
+                    // Into the water: it sinks (the splash is drawn by the game).
+                    a.flying = false
+                    arrows.remove(a)
+                    events.add(DuelEvent.Miss(a.byPlayer, tipX, groundY, true))
+                    land(a, events)
+                    return
+                }
                 if (a.kind == ArrowKind.BOMB) {
                     blast(a, tipX, tipY, events, direct = false)
                     return
@@ -834,6 +917,8 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
         const val PIERCE_SPEED = 20f
         /** How far below the lower tower top the ground is (meters). */
         const val GROUND_DEPTH = 10f
+        /** Height of the rock an archer stands on when "on the ground" over water. */
+        const val LOW_ROCK = 1.3f
         const val SHIELD_R = 1.25f
         const val BLAST_R = 2.2f
         const val BLAST_DAMAGE = 55

@@ -79,7 +79,11 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
     private var killAt = -1f
     /** Water or lava below: arrows and bodies splash and sink. 0 water, 1 lava. */
     var liquidGround = false
+        set(v) { field = v; duel.liquid = v }
     var lavaGround = false
+    /** Ripples on the water surface: x, birth clock, strength (ring buffer). */
+    val ripples = FloatArray(RIPPLES * 3)
+    private var rippleNext = 0
     /** Burning (fire arrow) until this clock time, per side. */
     var enemyBurnUntil = -1f
         private set
@@ -138,6 +142,8 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
 
     private fun begin(d: Duel) {
         duel = d
+        d.liquid = liquidGround
+        for (i in 0 until RIPPLES) ripples[i * 3 + 1] = -100f
         particles.clear()
         texts.clear()
         props.clear()
@@ -224,6 +230,8 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         burning(duel.player, playerBurnUntil)
         dust(duel.player)
         dust(duel.enemy)
+        water(duel.player)
+        water(duel.enemy)
         particles.update(dt)
         texts.removeAll { clock - it.born > 1.4f }
         shake *= exp(-rd * 8f)
@@ -289,6 +297,55 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
             shake = max(shake, (r.thud * 6f).coerceAtMost(0.35f))
         }
         r.thud = 0f
+    }
+
+    /** Splash when a body hits the water, then bubbles while it sinks. */
+    private fun water(r: Ragdoll) {
+        if (!liquidGround) return
+        val surf = duel.groundY
+        if (r.splash > 0.02f) {
+            val power = (r.splash * 120f).coerceIn(4f, 18f) // entry speed, m/s
+            splash(r.splashX, surf, power)
+            shake = max(shake, (power / 40f).coerceAtMost(0.4f))
+            r.splash = 0f
+        }
+        if (r.underwater > 0f && r.underwater < 2.5f && rnd.nextFloat() < 0.35f) {
+            val i = if (rnd.nextBoolean()) Ragdoll.HEAD else Ragdoll.CHEST
+            val c = if (lavaGround) FIRE_B else BUBBLE
+            particles.add(r.x[i] + (rnd.nextFloat() - 0.5f) * 0.3f, min(r.y[i], surf - 0.05f), (rnd.nextFloat() - 0.5f) * 0.2f, 0.6f + rnd.nextFloat() * 0.6f,
+                c[0], c[1], c[2], 0.03f + rnd.nextFloat() * 0.04f, 0.5f + rnd.nextFloat() * 0.6f, -1.5f)
+        }
+    }
+
+    /** Water flying up: a crown of droplets, a tall column, mist and expanding ripples. */
+    fun splash(x: Float, surf: Float, power: Float) {
+        val c = if (lavaGround) FIRE_A else WATER
+        val n = (power * 6f).toInt().coerceIn(20, 110)
+        repeat(n) {
+            // Mostly upwards, fanning out to the sides
+            val a = 1.5708f + (rnd.nextFloat() - 0.5f) * 2.2f
+            val sp = power * (0.25f + rnd.nextFloat() * 0.55f)
+            particles.add(x + (rnd.nextFloat() - 0.5f) * 0.4f, surf + 0.05f, cos(a) * sp * 0.6f, sin(a) * sp, c[0], c[1], c[2], 0.035f + rnd.nextFloat() * 0.06f, 0.7f + rnd.nextFloat() * 0.7f)
+        }
+        // Central column
+        repeat(n / 3) {
+            particles.add(x + (rnd.nextFloat() - 0.5f) * 0.25f, surf, (rnd.nextFloat() - 0.5f) * 0.6f, power * (0.6f + rnd.nextFloat() * 0.5f), 0.92f, 0.97f, 1f, 0.05f + rnd.nextFloat() * 0.05f, 0.8f + rnd.nextFloat() * 0.5f)
+        }
+        // Mist
+        repeat(n / 4) {
+            val a = rnd.nextFloat() * 3.1416f
+            particles.add(x, surf + 0.1f, cos(a) * 2.5f, sin(a) * 1.2f, 0.95f, 0.98f, 1f, 0.09f + rnd.nextFloat() * 0.08f, 0.5f + rnd.nextFloat() * 0.4f, 1f)
+        }
+        ripple(x, (power / 10f).coerceIn(0.4f, 1.6f))
+        ripple(x, (power / 14f).coerceIn(0.3f, 1.2f), 0.25f)
+    }
+
+    private fun ripple(x: Float, strength: Float, delay: Float = 0f) {
+        val i = rippleNext % RIPPLES
+        rippleNext++
+        ripples[i * 3] = x
+        ripples[i * 3 + 1] = clock + delay
+        ripples[i * 3 + 2] = strength
     }
 
     /** Little flames rising from a body hit by a fire arrow. */
@@ -482,10 +539,8 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
                 }
                 is DuelEvent.Miss -> if (e.ground) {
                     if (liquidGround && e.y <= duel.groundY + 0.3f) {
-                        // Splash: the arrow sinks.
-                        burst(e.x, e.y, 26, if (lavaGround) FIRE_A else WATER, 3.5f)
-                        val sunk = duel.arrows.lastOrNull { !it.flying && it.stuckIn == null && abs(it.x - e.x) < 1.2f }
-                        if (sunk != null) duel.arrows.remove(sunk)
+                        // Small splash: the arrow sinks.
+                        splash(e.x, duel.groundY, 5f)
                     } else {
                         burst(e.x, e.y, 14, DUST, 2.5f)
                     }
@@ -560,7 +615,9 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         val HEAL_C = floatArrayOf(0.45f, 1f, 0.55f)
         val FEATHER = floatArrayOf(0.95f, 0.95f, 0.98f)
         val BALLOON_C = floatArrayOf(1f, 0.3f, 0.45f)
-        val WATER = floatArrayOf(0.6f, 0.85f, 1f)
+        val WATER = floatArrayOf(0.62f, 0.86f, 1f)
+        val BUBBLE = floatArrayOf(0.85f, 0.95f, 1f)
+        const val RIPPLES = 8
         /** Seconds the kill cam lasts after the blow lands. */
         const val KILL_CAM_AFTER = 1.3f
     }
@@ -655,14 +712,17 @@ class Particles(val max: Int) {
     val x = FloatArray(max); val y = FloatArray(max); val vx = FloatArray(max); val vy = FloatArray(max)
     val r = FloatArray(max); val g = FloatArray(max); val b = FloatArray(max)
     val size = FloatArray(max); val life = FloatArray(max); val maxLife = FloatArray(max)
+    /** Gravity per particle (m/s²): 9 falls, negative rises (bubbles). */
+    val grav = FloatArray(max)
     var count = 0
         private set
 
     fun clear() { count = 0 }
 
-    fun add(px: Float, py: Float, pvx: Float, pvy: Float, cr: Float, cg: Float, cb: Float, s: Float, l: Float) {
+    fun add(px: Float, py: Float, pvx: Float, pvy: Float, cr: Float, cg: Float, cb: Float, s: Float, l: Float, gravity: Float = 9f) {
         val i = if (count < max) count++ else Random.nextInt(max)
         x[i] = px; y[i] = py; vx[i] = pvx; vy[i] = pvy; r[i] = cr; g[i] = cg; b[i] = cb; size[i] = s; life[i] = l; maxLife[i] = l
+        grav[i] = gravity
     }
 
     fun update(dt: Float) {
@@ -673,12 +733,12 @@ class Particles(val max: Int) {
                 val last = count - 1
                 if (i != last) {
                     x[i] = x[last]; y[i] = y[last]; vx[i] = vx[last]; vy[i] = vy[last]; r[i] = r[last]; g[i] = g[last]; b[i] = b[last]
-                    size[i] = size[last]; life[i] = life[last]; maxLife[i] = maxLife[last]
+                    size[i] = size[last]; life[i] = life[last]; maxLife[i] = maxLife[last]; grav[i] = grav[last]
                 }
                 count--
                 continue
             }
-            vy[i] -= 9f * dt
+            vy[i] -= grav[i] * dt
             vx[i] *= 0.985f
             x[i] += vx[i] * dt
             y[i] += vy[i] * dt
