@@ -1,0 +1,650 @@
+package com.farias.prismaarchers.game
+
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.exp
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
+import kotlin.math.sin
+import kotlin.math.sqrt
+import kotlin.random.Random
+
+/*
+ * Pure rules of the archery duel (no Android): ragdoll archers made of Verlet points, arrows with
+ * gravity and wind, platforms, hits and the enemy AI. World units are meters, y points up.
+ */
+
+const val GRAVITY = 9.8f
+
+/** A platform the archers stand on: from [x0] to [x1], top at [top], [depth] tall. */
+class Platform(val x0: Float, val x1: Float, val top: Float, val depth: Float = 30f) {
+    fun contains(x: Float, y: Float) = x in x0..x1 && y <= top && y >= top - depth
+}
+
+/** Body parts (for damage and for where an arrow sticks). */
+enum class Part(val damage: Int) { HEAD(100), TORSO(34), ARM(18), LEG(22) }
+
+/**
+ * A stick-figure archer simulated with Verlet points. While alive, every point is pulled towards an
+ * animated pose (standing, aiming the bow); hits push points away and the pose pulls them back. When
+ * dead, the pose lets go and the body falls freely, bouncing on platforms and off the edges.
+ */
+class Ragdoll(var rootX: Float, var rootY: Float, val facing: Float) {
+    companion object {
+        const val HEAD = 0; const val NECK = 1; const val CHEST = 2; const val PELVIS = 3
+        const val L_ELBOW = 4; const val L_HAND = 5; const val R_ELBOW = 6; const val R_HAND = 7
+        const val L_KNEE = 8; const val L_FOOT = 9; const val R_KNEE = 10; const val R_FOOT = 11
+        const val N = 12
+        const val HEAD_R = 0.17f
+
+        /** Bones: (a, b, part, radius). */
+        val BONES = arrayOf(
+            intArrayOf(NECK, HEAD), intArrayOf(NECK, CHEST), intArrayOf(CHEST, PELVIS),
+            intArrayOf(NECK, L_ELBOW), intArrayOf(L_ELBOW, L_HAND), intArrayOf(NECK, R_ELBOW), intArrayOf(R_ELBOW, R_HAND),
+            intArrayOf(PELVIS, L_KNEE), intArrayOf(L_KNEE, L_FOOT), intArrayOf(PELVIS, R_KNEE), intArrayOf(R_KNEE, R_FOOT),
+        )
+        val BONE_PART = arrayOf(Part.HEAD, Part.TORSO, Part.TORSO, Part.ARM, Part.ARM, Part.ARM, Part.ARM, Part.LEG, Part.LEG, Part.LEG, Part.LEG)
+        val BONE_R = floatArrayOf(0.06f, 0.13f, 0.14f, 0.06f, 0.055f, 0.06f, 0.055f, 0.08f, 0.07f, 0.08f, 0.07f)
+    }
+
+    val x = FloatArray(N); val y = FloatArray(N)
+    private val px = FloatArray(N); private val py = FloatArray(N)
+    private val poseX = FloatArray(N); private val poseY = FloatArray(N)
+    private val len = FloatArray(BONES.size)
+
+    var alive = true
+        private set
+    /** Aim angle of the bow arm (radians, 0 = towards [facing], up positive). */
+    var aim = 0.25f
+    /** 0..1 how far the string is drawn (pose only). */
+    var draw = 0f
+    /** Seconds since the last hit (for the flinch). */
+    var sinceHit = 9f
+    private var settledTime = 0f
+
+    init {
+        buildPose()
+        for (i in 0 until N) { x[i] = poseX[i]; y[i] = poseY[i]; px[i] = x[i]; py[i] = y[i] }
+        for ((k, b) in BONES.withIndex()) len[k] = dist(b[0], b[1])
+    }
+
+    private fun dist(a: Int, b: Int): Float { val dx = x[a] - x[b]; val dy = y[a] - y[b]; return sqrt(dx * dx + dy * dy) }
+
+    /** The standing / aiming pose around the feet at (rootX, rootY). */
+    private fun buildPose() {
+        val f = facing
+        fun set(i: Int, dx: Float, dy: Float) { poseX[i] = rootX + dx * f; poseY[i] = rootY + dy }
+        val breathe = 0f
+        set(L_FOOT, -0.17f, 0f); set(R_FOOT, 0.2f, 0f)
+        set(L_KNEE, -0.1f, 0.45f); set(R_KNEE, 0.14f, 0.45f)
+        set(PELVIS, 0f, 0.9f)
+        set(CHEST, 0.02f, 1.24f + breathe)
+        set(NECK, 0.03f, 1.52f + breathe)
+        set(HEAD, 0.05f, 1.74f + breathe)
+        // Front arm holds the bow along the aim; back arm draws the string.
+        val ca = cos(aim); val sa = sin(aim)
+        set(R_ELBOW, 0.03f + ca * 0.3f, 1.47f + sa * 0.3f)
+        set(R_HAND, 0.03f + ca * 0.58f, 1.47f + sa * 0.58f)
+        val pull = 0.58f - 0.5f * draw
+        set(L_HAND, 0.03f + ca * pull, 1.47f + sa * pull)
+        set(L_ELBOW, 0.03f + ca * pull * 0.5f - sa * 0.18f * draw - 0.12f * (1 - draw), 1.47f + sa * pull * 0.5f + ca * 0.18f * draw - 0.1f * (1 - draw))
+    }
+
+    /** Pushes the point nearest to the hit and the ones around it. */
+    fun impulse(i: Int, vx: Float, vy: Float) {
+        // Verlet velocity = x - px: moving px backwards adds velocity.
+        val dt = 1f / 120f
+        px[i] -= vx * dt; py[i] -= vy * dt
+        sinceHit = 0f
+    }
+
+    fun kill(vx: Float, vy: Float, at: Int) {
+        if (!alive) return
+        alive = false
+        settledTime = 0f
+        impulse(at, vx, vy)
+        // A little spin so every fall looks different.
+        impulse(PELVIS, vx * 0.3f, vy * 0.3f)
+    }
+
+    /** Back on its feet at the root (rewarded "continue"). */
+    fun revive() {
+        alive = true
+        sinceHit = 9f
+        buildPose()
+        for (i in 0 until N) { x[i] = poseX[i]; y[i] = poseY[i]; px[i] = x[i]; py[i] = y[i] }
+    }
+
+    fun step(dt: Float, platforms: List<Platform>) {
+        sinceHit += dt
+        if (alive) {
+            buildPose()
+            // Springs back to the pose: soft right after a hit (a flinch), then firm.
+            val k = if (sinceHit < 0.25f) 0.08f else 0.35f
+            for (i in 0 until N) {
+                val vx = (x[i] - px[i]) * 0.86f
+                val vy = (y[i] - py[i]) * 0.86f
+                px[i] = x[i]; py[i] = y[i]
+                x[i] += vx + (poseX[i] - x[i]) * k
+                y[i] += vy + (poseY[i] - y[i]) * k
+            }
+        } else {
+            for (i in 0 until N) {
+                val vx = (x[i] - px[i]) * 0.995f
+                val vy = (y[i] - py[i]) * 0.995f
+                px[i] = x[i]; py[i] = y[i]
+                x[i] += vx
+                y[i] += vy - GRAVITY * dt * dt
+            }
+            repeat(6) { solveBones() }
+            collide(platforms)
+        }
+    }
+
+    private fun solveBones() {
+        for ((k, b) in BONES.withIndex()) {
+            val a = b[0]; val c = b[1]
+            val dx = x[c] - x[a]; val dy = y[c] - y[a]
+            val d = sqrt(dx * dx + dy * dy).coerceAtLeast(1e-5f)
+            val diff = (d - len[k]) / d * 0.5f
+            x[a] += dx * diff; y[a] += dy * diff
+            x[c] -= dx * diff; y[c] -= dy * diff
+        }
+        // Keep the legs and arms from folding into the body (soft distance limits).
+        keepApart(HEAD, PELVIS, 0.7f)
+        keepApart(L_FOOT, R_FOOT, 0.15f)
+        keepApart(HEAD, CHEST, 0.42f)
+    }
+
+    private fun keepApart(a: Int, c: Int, minD: Float) {
+        val dx = x[c] - x[a]; val dy = y[c] - y[a]
+        val d = sqrt(dx * dx + dy * dy).coerceAtLeast(1e-5f)
+        if (d >= minD) return
+        val diff = (d - minD) / d * 0.5f
+        x[a] += dx * diff; y[a] += dy * diff
+        x[c] -= dx * diff; y[c] -= dy * diff
+    }
+
+    private fun collide(platforms: List<Platform>) {
+        for (i in 0 until N) {
+            val r = if (i == HEAD) HEAD_R else 0.06f
+            for (p in platforms) {
+                if (x[i] < p.x0 || x[i] > p.x1) continue
+                val bottom = y[i] - r
+                if (bottom < p.top && py[i] - r >= p.top - 0.3f && y[i] > p.top - p.depth) {
+                    // Land on top with friction.
+                    y[i] = p.top + r
+                    val vx = x[i] - px[i]
+                    px[i] = x[i] - vx * 0.6f
+                    py[i] = y[i] + (y[i] - py[i]).coerceAtMost(0f) * 0.25f
+                }
+            }
+        }
+    }
+
+    /** True when a dead body has stopped moving (or fell far away). */
+    fun settled(dt: Float): Boolean {
+        var speed = 0f
+        for (i in 0 until N) speed = max(speed, abs(x[i] - px[i]) + abs(y[i] - py[i]))
+        settledTime = if (speed < 0.004f) settledTime + dt else 0f
+        return settledTime > 0.5f || y[PELVIS] < rootY - 25f
+    }
+
+    /** Where the bow's arrow starts and the string hand is. */
+    fun bowX() = x[R_HAND]
+    fun bowY() = y[R_HAND]
+
+    /**
+     * Segment/body test for a point moving from (ax, ay) to (bx, by). Returns the bone index hit and the
+     * fraction along the motion, or null.
+     */
+    fun hitTest(ax: Float, ay: Float, bx: Float, by: Float): Pair<Int, Float>? {
+        var best: Pair<Int, Float>? = null
+        // Head as a circle first (it's what matters most).
+        run {
+            val t = segCircle(ax, ay, bx, by, x[HEAD], y[HEAD], HEAD_R + 0.02f)
+            if (t != null) best = 0 to t
+        }
+        for ((k, b) in BONES.withIndex()) {
+            if (k == 0) continue
+            val t = segSeg(ax, ay, bx, by, x[b[0]], y[b[0]], x[b[1]], y[b[1]], BONE_R[k] + 0.03f) ?: continue
+            if (best == null || t < best!!.second) best = k to t
+        }
+        return best
+    }
+}
+
+/** Fraction along a→b where it enters the circle, or null. */
+fun segCircle(ax: Float, ay: Float, bx: Float, by: Float, cx: Float, cy: Float, r: Float): Float? {
+    val dx = bx - ax; val dy = by - ay
+    val fx = ax - cx; val fy = ay - cy
+    val a = dx * dx + dy * dy
+    if (a < 1e-9f) return null
+    val b = 2 * (fx * dx + fy * dy)
+    val c = fx * fx + fy * fy - r * r
+    val disc = b * b - 4 * a * c
+    if (disc < 0) return null
+    val s = sqrt(disc)
+    val t1 = (-b - s) / (2 * a)
+    val t2 = (-b + s) / (2 * a)
+    if (t1 in 0f..1f) return t1
+    if (c < 0 && t2 >= 0f) return 0f
+    return null
+}
+
+/** Fraction along a→b where it comes within [r] of segment c→d (sampled), or null. */
+fun segSeg(ax: Float, ay: Float, bx: Float, by: Float, cx: Float, cy: Float, dx: Float, dy: Float, r: Float): Float? {
+    val steps = 6
+    for (s in 0..steps) {
+        val t = s / steps.toFloat()
+        val px = ax + (bx - ax) * t
+        val py = ay + (by - ay) * t
+        val ex = dx - cx; val ey = dy - cy
+        val l2 = ex * ex + ey * ey
+        val u = if (l2 < 1e-9f) 0f else (((px - cx) * ex + (py - cy) * ey) / l2).coerceIn(0f, 1f)
+        val qx = cx + ex * u - px; val qy = cy + ey * u - py
+        if (qx * qx + qy * qy <= r * r) return t
+    }
+    return null
+}
+
+/** An arrow in flight or stuck somewhere. */
+class Arrow(var x: Float, var y: Float, var vx: Float, var vy: Float, val byPlayer: Boolean, val kind: Int = 0) {
+    var angle = atan2(vy, vx)
+    var flying = true
+    var age = 0f
+    /** Stuck in a body: which archer, bone and where along it, plus the arrow angle relative to the bone. */
+    var stuckIn: Ragdoll? = null
+    var bone = 0
+    var along = 0.5f
+    var relAngle = 0f
+    var depth = 0f
+}
+
+/** Something that happened, for sounds, effects and the UI. */
+sealed class DuelEvent {
+    data class Shot(val byPlayer: Boolean) : DuelEvent()
+    data class Hit(val byPlayer: Boolean, val part: Part, val damage: Int, val x: Float, val y: Float, val kill: Boolean) : DuelEvent()
+    data class Miss(val byPlayer: Boolean, val x: Float, val y: Float, val ground: Boolean) : DuelEvent()
+    data class TurnStart(val player: Boolean) : DuelEvent()
+    data class Over(val playerWon: Boolean) : DuelEvent()
+}
+
+/** One duel (a level): two platforms, two archers, wind, whose turn it is. */
+class LevelSpec(
+    val number: Int,
+    val distance: Float,
+    val heightDiff: Float,
+    val wind: Float,
+    val enemyHp: Int,
+    val enemyHelmet: Boolean,
+    val enemySkill: Float,
+    val boss: Boolean,
+    val seed: Long,
+)
+
+object Levels {
+    const val WIND_FROM = 6
+
+    fun isBoss(n: Int) = n >= 10 && n % 10 == 0
+
+    fun level(n: Int, salt: Long = 0L): LevelSpec {
+        val rnd = Random(n * 7_919L + 31 + salt)
+        val d = ((n - 1) / 80f).coerceIn(0f, 1f)
+        val boss = isBoss(n)
+        val distance = 13f + 14f * d + rnd.nextFloat() * (4f + 6f * d)
+        val heightDiff = (rnd.nextFloat() * 2f - 1f) * (0.5f + 4f * d)
+        val wind = if (n < WIND_FROM) 0f else (rnd.nextFloat() * 2f - 1f) * (0.6f + 3.2f * d)
+        val hp = if (boss) 150 + n else 100 + (n / 5) * 5
+        // 0 = clumsy, 1 = deadly. Bosses aim better.
+        val skill = (0.15f + 0.7f * d + if (boss) 0.05f else 0f).coerceAtMost(0.9f)
+        return LevelSpec(n, distance, heightDiff, wind, hp, boss || n >= 25 && rnd.nextFloat() < 0.25f, skill, boss, n * 131L + salt)
+    }
+
+    fun daily(day: Int): LevelSpec = level(30 + day % 40, salt = day * 2_654_435_761L)
+}
+
+/**
+ * The duel simulation: turns, arrows, hits and the enemy AI. The UI feeds aim/release for the
+ * player; [step] advances everything.
+ */
+class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nanoTime()) {
+    enum class Turn { PLAYER, PLAYER_ARROW, ENEMY, ENEMY_ARROW, OVER }
+
+    val platforms: List<Platform>
+    val player: Ragdoll
+    val enemy: Ragdoll
+    var enemyHp = spec.enemyHp
+    val maxEnemyHp = spec.enemyHp
+    var maxPlayerHp = 100
+    var turn = Turn.PLAYER
+        private set
+    val arrows = ArrayList<Arrow>()
+    var flying: Arrow? = null
+        private set
+    var time = 0f
+        private set
+    var playerWon = false
+        private set
+    /** Seconds the enemy has been "thinking". */
+    private var enemyWait = 0f
+    private var enemyShots = 0
+    private val rnd = Random(seed)
+    var shotsFired = 0
+        private set
+    /** Player shields left (blocks the next enemy hit). */
+    var shields = 0
+    /** Over: set when the loser's body stopped falling. */
+    var finished = false
+        private set
+    private var overTime = 0f
+
+    init {
+        val ex = spec.distance
+        val ey = spec.heightDiff
+        platforms = listOf(
+            Platform(-3.5f, 1.2f, 0f),
+            Platform(ex - 1.2f, ex + 3.5f, ey),
+        )
+        player = Ragdoll(0f, 0f, 1f)
+        enemy = Ragdoll(ex, ey, -1f)
+        player.aim = 0.3f
+        enemy.aim = 0.3f
+    }
+
+    // ------------------------------------------------------------------ player input
+
+    /** Aim while dragging: [angle] radians (up positive, towards the enemy), [power] 0..1. */
+    fun aimPlayer(angle: Float, power: Float) {
+        if (turn != Turn.PLAYER) return
+        player.aim = angle.coerceIn(-1.2f, 1.45f)
+        player.draw = power.coerceIn(0f, 1f)
+    }
+
+    fun releasePlayer(angle: Float, power: Float, events: MutableList<DuelEvent>, kind: Int = 0) {
+        if (turn != Turn.PLAYER || power < 0.08f) {
+            player.draw = 0f
+            return
+        }
+        player.aim = angle.coerceIn(-1.2f, 1.45f)
+        shoot(player, player.aim, power, true, kind, events)
+        player.draw = 0f
+        shotsFired++
+        turn = Turn.PLAYER_ARROW
+    }
+
+    private fun shoot(r: Ragdoll, aim: Float, power: Float, byPlayer: Boolean, kind: Int, events: MutableList<DuelEvent>) {
+        val speed = MIN_SPEED + (MAX_SPEED - MIN_SPEED) * power.coerceIn(0f, 1f)
+        val dir = r.facing
+        val a = Arrow(r.bowX(), r.bowY(), cos(aim) * speed * dir, sin(aim) * speed, byPlayer, kind)
+        arrows.add(a)
+        if (arrows.size > 24) arrows.removeAt(0)
+        flying = a
+        events.add(DuelEvent.Shot(byPlayer))
+    }
+
+    /** Rewarded "continue" after the player died: back up with [hp] and it's the player's turn. */
+    fun revivePlayer(hp: Int) {
+        if (turn != Turn.OVER || playerWon) return
+        playerHp = hp
+        player.revive()
+        arrows.removeAll { it.stuckIn === player }
+        flying = null
+        finished = false
+        turn = Turn.PLAYER
+    }
+
+    // ------------------------------------------------------------------ simulation
+
+    fun step(dt: Float, events: MutableList<DuelEvent>) {
+        time += dt
+        player.step(dt, platforms)
+        enemy.step(dt, platforms)
+        val a = flying
+        if (a != null) stepArrow(a, dt, events)
+        when (turn) {
+            Turn.ENEMY -> {
+                enemyWait += dt
+                enemy.draw = (enemyWait / 0.9f).coerceIn(0f, 1f)
+                val (ang, pow) = enemyPlan
+                enemy.aim = enemy.aim + (ang - enemy.aim) * min(1f, dt * 4f)
+                if (enemyWait > 1.1f) {
+                    shoot(enemy, ang, pow, false, 0, events)
+                    enemy.draw = 0f
+                    enemyShots++
+                    turn = Turn.ENEMY_ARROW
+                }
+            }
+            Turn.OVER -> {
+                overTime += dt
+                val loser = if (playerWon) enemy else player
+                if (!finished && (loser.settled(dt) || overTime > 4f)) {
+                    finished = true
+                    events.add(DuelEvent.Over(playerWon))
+                }
+            }
+            else -> Unit
+        }
+        // Arrows stuck in bodies follow them.
+        for (ar in arrows) {
+            val body = ar.stuckIn ?: continue
+            val b = Ragdoll.BONES[ar.bone]
+            val x0 = body.x[b[0]]; val y0 = body.y[b[0]]; val x1 = body.x[b[1]]; val y1 = body.y[b[1]]
+            val boneAng = atan2(y1 - y0, x1 - x0)
+            ar.angle = boneAng + ar.relAngle
+            val cx = x0 + (x1 - x0) * ar.along
+            val cy = y0 + (y1 - y0) * ar.along
+            ar.x = cx + cos(ar.angle) * ar.depth
+            ar.y = cy + sin(ar.angle) * ar.depth
+        }
+    }
+
+    private fun stepArrow(a: Arrow, dt: Float, events: MutableList<DuelEvent>) {
+        a.age += dt
+        val ox = a.x; val oy = a.y
+        a.vx += spec.wind * dt
+        a.vy -= GRAVITY * dt
+        a.x += a.vx * dt
+        a.y += a.vy * dt
+        a.angle = atan2(a.vy, a.vx)
+        val tipX = a.x + cos(a.angle) * 0.35f
+        val tipY = a.y + sin(a.angle) * 0.35f
+        val oTipX = ox + cos(a.angle) * 0.35f
+        val oTipY = oy + sin(a.angle) * 0.35f
+        val target = if (a.byPlayer) enemy else player
+        // Body hit
+        val hit = if (target.alive || a.age < 6f) target.hitTest(oTipX, oTipY, tipX, tipY) else null
+        if (hit != null) {
+            val (bone, t) = hit
+            val hx = oTipX + (tipX - oTipX) * t
+            val hy = oTipY + (tipY - oTipY) * t
+            val part = Ragdoll.BONE_PART[bone]
+            stick(a, target, bone, hx, hy)
+            var dmg = part.damage
+            if (part == Part.HEAD && a.byPlayer && spec.enemyHelmet) dmg = 50
+            if (part == Part.HEAD && !a.byPlayer) dmg = PLAYER_HEAD_DAMAGE
+            if (!a.byPlayer && shields > 0) {
+                shields--
+                dmg = 0
+            }
+            val speed = sqrt(a.vx * a.vx + a.vy * a.vy)
+            // Push the body: the nearest point of the bone takes most of it.
+            val near = if (bone == 0) Ragdoll.HEAD else Ragdoll.BONES[bone][1]
+            target.impulse(near, a.vx / speed * 3.5f, a.vy / speed * 3.5f)
+            var kill = false
+            if (a.byPlayer) {
+                enemyHp = (enemyHp - dmg).coerceAtLeast(0)
+                kill = enemyHp == 0
+            } else {
+                playerHp = (playerHp - dmg).coerceAtLeast(0)
+                kill = playerHp == 0
+            }
+            if (kill) target.kill(a.vx * 0.9f, a.vy * 0.9f + 2f, near)
+            events.add(DuelEvent.Hit(a.byPlayer, part, dmg, hx, hy, kill))
+            endFlight(a, kill, events)
+            return
+        }
+        // Platform or out of the world
+        for (p in platforms) {
+            if (p.contains(tipX, tipY)) {
+                a.flying = false
+                events.add(DuelEvent.Miss(a.byPlayer, tipX, tipY, true))
+                endFlight(a, false, events)
+                return
+            }
+        }
+        if (a.y < -40f || abs(a.x - spec.distance / 2f) > spec.distance + 60f) {
+            a.flying = false
+            events.add(DuelEvent.Miss(a.byPlayer, a.x, a.y, false))
+            endFlight(a, false, events)
+        }
+    }
+
+    private fun stick(a: Arrow, body: Ragdoll, bone: Int, hx: Float, hy: Float) {
+        a.flying = false
+        a.stuckIn = body
+        a.bone = bone
+        val b = Ragdoll.BONES[bone]
+        val x0 = body.x[b[0]]; val y0 = body.y[b[0]]; val x1 = body.x[b[1]]; val y1 = body.y[b[1]]
+        val ex = x1 - x0; val ey = y1 - y0
+        val l2 = (ex * ex + ey * ey).coerceAtLeast(1e-6f)
+        a.along = (((hx - x0) * ex + (hy - y0) * ey) / l2).coerceIn(0f, 1f)
+        val boneAng = atan2(ey, ex)
+        a.relAngle = a.angle - boneAng
+        // The arrow shaft sits mostly outside the body: its centre is behind the tip.
+        a.depth = -0.22f
+    }
+
+    private fun endFlight(a: Arrow, kill: Boolean, events: MutableList<DuelEvent>) {
+        flying = null
+        if (kill) {
+            playerWon = a.byPlayer
+            turn = Turn.OVER
+            overTime = 0f
+            return
+        }
+        if (a.byPlayer) {
+            turn = Turn.ENEMY
+            enemyWait = 0f
+            enemyPlan = planEnemyShot()
+            events.add(DuelEvent.TurnStart(false))
+        } else {
+            turn = Turn.PLAYER
+            events.add(DuelEvent.TurnStart(true))
+        }
+    }
+
+    // ------------------------------------------------------------------ enemy AI
+
+    private var enemyPlan: Pair<Float, Float> = 0.3f to 0.7f
+
+    /**
+     * Finds an angle/power that would hit the player's chest (wind included), then adds an error that
+     * shrinks with skill and with every shot (the enemy "learns").
+     */
+    private fun planEnemyShot(): Pair<Float, Float> {
+        // Aim at a point near the player's chest: the miss distance (meters) shrinks with skill and a bit
+        // with every shot, but never to zero. Same feel at any distance.
+        val learn = (1f - enemyShots * ENEMY_LEARN).coerceAtLeast(ENEMY_LEARN_FLOOR)
+        val sigma = (ENEMY_ERR_MAX + (ENEMY_ERR_MIN - ENEMY_ERR_MAX) * spec.enemySkill) * learn
+        // Height is what decides a hit (the arc crosses the body anyway), so the error is vertical.
+        val tx = player.x[Ragdoll.CHEST] + gauss() * 0.3f
+        val ty = player.y[Ragdoll.CHEST] - 0.15f + gauss() * sigma
+        return solveShot(enemy.bowX(), enemy.bowY(), -1f, tx, ty, spec.wind)
+    }
+
+    private fun gauss(): Float {
+        // Sum of uniforms ≈ normal (mean 0, sd 1).
+        var s = 0f
+        repeat(4) { s += rnd.nextFloat() }
+        return (s - 2f) * 1.732f
+    }
+
+    companion object {
+        /** Enemy miss spread (meters, 1 sd) for skill 0 and skill 1. */
+        var ENEMY_ERR_MAX = 2.6f
+        var ENEMY_ERR_MIN = 1.3f
+        var ENEMY_LEARN = 0.07f
+        var ENEMY_LEARN_FLOOR = 0.75f
+        /** Damage the player takes on a headshot (not an instant kill: that would feel unfair). */
+        var PLAYER_HEAD_DAMAGE = 50
+        const val MIN_SPEED = 9f
+        const val MAX_SPEED = 30f
+
+        /** Searches angle/power so an arrow from (sx, sy) facing [dir] passes closest to (tx, ty). */
+        fun solveShot(sx: Float, sy: Float, dir: Float, tx: Float, ty: Float, wind: Float): Pair<Float, Float> {
+            var bestA = 0.3f
+            var bestP = 0.7f
+            var bestErr = Float.MAX_VALUE
+            var a = -0.4f
+            while (a <= 1.2f) {
+                var p = 0.15f
+                while (p <= 1.0001f) {
+                    val e = missDistance(sx, sy, dir, a, p, tx, ty, wind)
+                    if (e < bestErr) { bestErr = e; bestA = a; bestP = p }
+                    p += 0.05f
+                }
+                a += 0.05f
+            }
+            // Refine around the best.
+            var step = 0.025f
+            repeat(4) {
+                for (da in -2..2) for (dp in -2..2) {
+                    val aa = bestA + da * step
+                    val pp = (bestP + dp * step).coerceIn(0.1f, 1f)
+                    val e = missDistance(sx, sy, dir, aa, pp, tx, ty, wind)
+                    if (e < bestErr) { bestErr = e; bestA = aa; bestP = pp }
+                }
+                step *= 0.5f
+            }
+            return bestA to bestP
+        }
+
+        private fun missDistance(sx: Float, sy: Float, dir: Float, aim: Float, power: Float, tx: Float, ty: Float, wind: Float): Float {
+            val speed = MIN_SPEED + (MAX_SPEED - MIN_SPEED) * power
+            var x = sx; var y = sy
+            var vx = cos(aim) * speed * dir; var vy = sin(aim) * speed
+            val dt = 1f / 60f
+            var best = Float.MAX_VALUE
+            var t = 0f
+            while (t < 6f) {
+                vx += wind * dt; vy -= GRAVITY * dt
+                x += vx * dt; y += vy * dt
+                val d = (x - tx) * (x - tx) + (y - ty) * (y - ty)
+                if (d < best) best = d
+                if (y < ty - 15f) break
+                t += dt
+            }
+            return best
+        }
+
+        /** Points of the first part of a shot, for the aiming guide. */
+        fun preview(sx: Float, sy: Float, dir: Float, aim: Float, power: Float, wind: Float, seconds: Float, out: FloatArray): Int {
+            val speed = MIN_SPEED + (MAX_SPEED - MIN_SPEED) * power
+            var x = sx; var y = sy
+            var vx = cos(aim) * speed * dir; var vy = sin(aim) * speed
+            val dt = 1f / 60f
+            var n = 0
+            var t = 0f
+            var k = 0
+            while (t < seconds && n * 2 + 1 < out.size) {
+                vx += wind * dt; vy -= GRAVITY * dt
+                x += vx * dt; y += vy * dt
+                if (k++ % 3 == 0) { out[n * 2] = x; out[n * 2 + 1] = y; n++ }
+                t += dt
+            }
+            return n
+        }
+    }
+
+    /** Rounded helpers used by the UI. */
+    fun windKmh(): Int = (spec.wind * 3.6f * 2.5f).roundToInt()
+}
+
+/** Free, not used for logic: ease for the slow motion. */
+fun easeOut(t: Float): Float = 1f - exp(-5f * t)
+
+const val TWO_PI = (2 * PI).toFloat()
