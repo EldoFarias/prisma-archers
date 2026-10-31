@@ -46,7 +46,7 @@ sem outras redes, sem assinatura, sem compras no app.
 - Torres com base: cada mundo tem `World.base` (`TowerStyle`: penhasco, mesa, montanha, prédio, castelo, pedra) e
   `World.ground` (`GroundStyle`: mar, rua com carros, lava, areia, neve, grama); o chão é a 3ª plataforma do `Duel`.
 - Posições variadas por fase (`LevelSpec.playerH`/`enemyH`, altura de cada plataforma acima do chão): torres de alturas
-  diferentes, um arqueiro no chão e o outro no alto, ou os dois embaixo (a diferença cresce com a fase). Sobre água/lava
+  diferentes, um arqueiro no chão e o outro no alto, ou os dois embaixo (diferença de até ~5 m no início e ~19 m nas fases altas; torres até 22 m). Sobre água/lava
   (`Duel.liquid`), quem está "no chão" fica numa pedra baixa (`LOW_ROCK`). Largura das plataformas também varia.
 - Água/lava: o chão não é sólido; corpo que cai espirra (`ArcheryGame.splash`: gotas, coluna, névoa, ondas circulares
   `ripples`), freia e afunda devagar (`Ragdoll.waterY`), com bolhas; a água da frente esconde o corpo aos poucos.

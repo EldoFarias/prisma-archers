@@ -456,16 +456,21 @@ object Levels {
         val skill = (0.15f + 0.7f * d + if (boss) 0.05f else 0f).coerceAtMost(0.9f)
         val helmet = boss || n >= 25 && rnd.nextFloat() < 0.25f
         // Where the archers stand: towers of different heights, one of them on the ground, or both low.
-        val maxDiff = 2.5f + 9f * d
+        val maxDiff = 5f + 14f * d
         val layout = rnd.nextFloat()
         val playerH: Float
         val enemyH: Float
         when {
             n <= 3 -> { playerH = 7f + rnd.nextFloat() * 2f; enemyH = playerH + (rnd.nextFloat() * 2f - 1f) * 0.8f }
-            layout < 0.45f -> { playerH = 5f + rnd.nextFloat() * 7f; enemyH = (playerH + (rnd.nextFloat() * 2f - 1f) * maxDiff).coerceIn(3f, 14f) }
-            layout < 0.65f -> { playerH = 0f; enemyH = min(4f + rnd.nextFloat() * 8f, maxDiff) }
-            layout < 0.85f -> { enemyH = 0f; playerH = min(4f + rnd.nextFloat() * 8f, maxDiff) }
-            else -> { playerH = 0f; enemyH = rnd.nextFloat() * min(2.5f, maxDiff) }
+            layout < 0.45f -> {
+                // Towers of clearly different heights: one of them up high.
+                playerH = 3f + rnd.nextFloat() * 13f
+                val sign = if (rnd.nextBoolean()) 1f else -1f
+                enemyH = (playerH + sign * (0.4f + 0.6f * rnd.nextFloat()) * maxDiff).coerceIn(2f, 22f)
+            }
+            layout < 0.65f -> { playerH = 0f; enemyH = min(5f + rnd.nextFloat() * 15f, maxDiff) }
+            layout < 0.85f -> { enemyH = 0f; playerH = min(5f + rnd.nextFloat() * 15f, maxDiff) }
+            else -> { playerH = 0f; enemyH = rnd.nextFloat() * min(3f, maxDiff) }
         }
         return LevelSpec(n, distance, enemyH - playerH, wind, hp, helmet, skill, boss, n * 131L + salt, power, playerH, enemyH)
     }
@@ -1028,7 +1033,7 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
             var bestA = 0.3f
             var bestP = 0.7f
             var bestErr = Float.MAX_VALUE
-            var a = -0.4f
+            var a = -0.9f
             while (a <= 1.2f) {
                 var p = 0.15f
                 while (p <= 1.0001f) {
