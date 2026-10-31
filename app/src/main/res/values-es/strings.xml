@@ -148,6 +148,7 @@
     <string name="world_volcano">Volcán</string>
     <string name="world_x">Mundo %1$d</string>
     <string name="your_turn">Tu turno</string>
+    <string name="title_fall">¡AL VACÍO!</string>
     <string name="lv_x">Nv %1$d</string>
     <string name="boss_shield">Escudo mágico: se rompe con 2 impactos</string>
     <string name="boss_focus">Maestro arquero: casi nunca falla</string>

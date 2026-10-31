@@ -574,6 +574,14 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
                 }
                 is DuelEvent.Frozen -> burst(e.x, e.y, 40, ICE_C, 3f)
                 is DuelEvent.Thaw -> burst(e.x, e.y, 30, ICE_C, 2.5f)
+                is DuelEvent.Fell -> {
+                    // Shoved off the edge: slow motion on the fall.
+                    killAt = clock
+                    slowUntil = clock + 1.1f
+                    recorder.markKill()
+                    shake = max(shake, 0.4f)
+                    burst(e.x, e.y, 20, DUST, 2.5f)
+                }
                 is DuelEvent.Heal -> {
                     texts.add(WorldText("+${e.amount}", e.x, e.y, 3, clock))
                     burst(e.x, e.y - 0.4f, 24, HEAL_C, 2f)

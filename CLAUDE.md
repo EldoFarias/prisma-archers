@@ -50,6 +50,9 @@ sem outras redes, sem assinatura, sem compras no app.
   (`Duel.liquid`), quem está "no chão" fica numa pedra baixa (`LOW_ROCK`). Largura das plataformas também varia.
 - Água/lava: o chão não é sólido; corpo que cai espirra (`ArcheryGame.splash`: gotas, coluna, névoa, ondas circulares
   `ripples`), freia e afunda devagar (`Ragdoll.waterY`), com bolhas; a água da frente esconde o corpo aos poucos.
+- Golpe que não mata: reação de dor (`Ragdoll.hurtBy`: inclina para trás, solta o arco, mão no ferimento, olhos
+  apertados) e empurrão para trás (`knockFor`, menor no jogador). Quem passa da beirada de uma plataforma alta cai e
+  morre (`checkFalls`, evento `Fell`, título "DESPENCOU!").
 - Câmera do golpe final: segue a flecha até o impacto e acaba `KILL_CAM_AFTER` (1,3 s) depois, sempre no corpo.
 - Sobrevivência (`GameHost.playEndless`): um inimigo atrás do outro (`survivalSpec(k)`), +25 de vida entre eles;
   recorde em `Progress.bestEndless` (inimigos derrotados).

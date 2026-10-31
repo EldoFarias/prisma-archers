@@ -148,6 +148,7 @@
     <string name="world_volcano">Volcan</string>
     <string name="world_x">Monde %1$d</string>
     <string name="your_turn">À toi</string>
+    <string name="title_fall">DANS LE VIDE !</string>
     <string name="lv_x">Niv %1$d</string>
     <string name="boss_shield">Bouclier magique : cède après 2 coups</string>
     <string name="boss_focus">Maître archer : ne rate presque jamais</string>

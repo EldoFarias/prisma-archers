@@ -1211,6 +1211,7 @@ T = {
 
 ADD2 = {
 "en": {
+    'title_fall': 'OVER THE EDGE!',
     'world_night': 'Neon City',
     'lv_x': 'Lv %1$d',
     'boss_shield': 'Magic shield: breaks after 2 hits',
@@ -1258,6 +1259,7 @@ ADD2 = {
     'you_have_x': 'You have %1$d',
 },
 "pt": {
+    'title_fall': 'DESPENCOU!',
     'world_night': 'Cidade Neon',
     'lv_x': 'Nv %1$d',
     'boss_shield': 'Escudo mágico: quebra com 2 acertos',
@@ -1305,6 +1307,7 @@ ADD2 = {
     'you_have_x': 'Você tem %1$d',
 },
 "es": {
+    'title_fall': '¡AL VACÍO!',
     'world_night': 'Ciudad Neón',
     'lv_x': 'Nv %1$d',
     'boss_shield': 'Escudo mágico: se rompe con 2 impactos',
@@ -1352,6 +1355,7 @@ ADD2 = {
     'you_have_x': 'Tienes %1$d',
 },
 "fr": {
+    'title_fall': 'DANS LE VIDE !',
     'world_night': 'Ville Néon',
     'lv_x': 'Niv %1$d',
     'boss_shield': 'Bouclier magique : cède après 2 coups',
@@ -1399,6 +1403,7 @@ ADD2 = {
     'you_have_x': 'Tu en as %1$d',
 },
 "de": {
+    'title_fall': 'ABGESTÜRZT!',
     'world_night': 'Neonstadt',
     'lv_x': 'Lv %1$d',
     'boss_shield': 'Magischer Schild: bricht nach 2 Treffern',
@@ -1446,6 +1451,7 @@ ADD2 = {
     'you_have_x': 'Du hast %1$d',
 },
 "tr": {
+    'title_fall': 'UÇURUMA!',
     'world_night': 'Neon Şehir',
     'lv_x': 'Sv %1$d',
     'boss_shield': 'Sihirli kalkan: 2 vuruşta kırılır',
@@ -1493,6 +1499,7 @@ ADD2 = {
     'you_have_x': '%1$d tane var',
 },
 "in": {
+    'title_fall': 'JATUH!',
     'world_night': 'Kota Neon',
     'lv_x': 'Lv %1$d',
     'boss_shield': 'Perisai sihir: pecah setelah 2 kena',
@@ -1540,6 +1547,7 @@ ADD2 = {
     'you_have_x': 'Kamu punya %1$d',
 },
 "hi": {
+    'title_fall': 'नीचे गिरा!',
     'world_night': 'नियॉन शहर',
     'lv_x': 'स्तर %1$d',
     'boss_shield': 'जादुई ढाल: 2 वार में टूटती है',

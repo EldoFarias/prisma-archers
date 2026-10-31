@@ -149,6 +149,7 @@
     <string name="world_volcano">Volcano</string>
     <string name="world_x">World %1$d</string>
     <string name="your_turn">Your turn</string>
+    <string name="title_fall">OVER THE EDGE!</string>
     <string name="lv_x">Lv %1$d</string>
     <string name="boss_shield">Magic shield: breaks after 2 hits</string>
     <string name="boss_focus">Master archer: almost never misses</string>

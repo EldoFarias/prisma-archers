@@ -148,6 +148,7 @@
     <string name="world_volcano">Vulkan</string>
     <string name="world_x">Welt %1$d</string>
     <string name="your_turn">Du bist dran</string>
+    <string name="title_fall">ABGESTÜRZT!</string>
     <string name="lv_x">Lv %1$d</string>
     <string name="boss_shield">Magischer Schild: bricht nach 2 Treffern</string>
     <string name="boss_focus">Meisterschütze: verfehlt fast nie</string>

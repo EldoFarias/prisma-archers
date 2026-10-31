@@ -33,12 +33,23 @@ enum class Part(val damage: Int) { HEAD(100), TORSO(34), ARM(18), LEG(22) }
  * dead, the pose lets go and the body falls freely, bouncing on platforms and off the edges.
  */
 class Ragdoll(var rootX: Float, var rootY: Float, val facing: Float) {
+    /** Where it stood at the start (a revive puts it back there). */
+    val homeX = rootX
+    /** Knockback: the feet slide towards this x. */
+    var rootTargetX = rootX
+    /** Pain 1 → 0 after a hit that didn't kill: leans back, drops the bow, clutches the wound. */
+    var hurt = 0f
+        private set
+    private var hurtRelX = 0f
+    private var hurtRelY = 1.2f
     companion object {
         const val HEAD = 0; const val NECK = 1; const val CHEST = 2; const val PELVIS = 3
         const val L_ELBOW = 4; const val L_HAND = 5; const val R_ELBOW = 6; const val R_HAND = 7
         const val L_KNEE = 8; const val L_FOOT = 9; const val R_KNEE = 10; const val R_FOOT = 11
         const val N = 12
         const val HEAD_R = 0.17f
+        /** Seconds the pain reaction lasts. */
+        const val HURT_TIME = 0.95f
 
         /** Bones: (a, b, part, radius). */
         val BONES = arrayOf(
@@ -101,11 +112,15 @@ class Ragdoll(var rootX: Float, var rootY: Float, val facing: Float) {
         val sway = sin(time * 0.9f) * 0.012f
         val crouch = 0.05f * draw
         val hop = if (cheer) abs(sin(time * 7f)) * 0.12f else 0f
-        set(L_FOOT, -0.17f, hop); set(R_FOOT, 0.2f, hop)
-        set(L_KNEE, -0.1f + sway, 0.45f - crouch + hop); set(R_KNEE, 0.15f + sway, 0.45f - crouch + hop)
-        set(PELVIS, sway, 0.9f - crouch + hop)
-        set(CHEST, 0.02f + sway - 0.03f * draw, 1.24f + breathe - crouch + hop)
-        set(NECK, 0.03f + sway - 0.03f * draw, 1.52f + breathe - crouch + hop)
+        // Pain: an eased curve that peaks right after the hit; the upper body bends back, knees buckle.
+        val hp = if (hurt > 0f) easeHurt(hurt) else 0f
+        val lean = -0.22f * hp
+        val buckle = 0.12f * hp
+        set(L_FOOT, -0.17f - 0.12f * hp, hop); set(R_FOOT, 0.2f, hop)
+        set(L_KNEE, -0.1f + sway - 0.08f * hp, 0.45f - crouch + hop - buckle * 0.5f); set(R_KNEE, 0.15f + sway + 0.05f * hp, 0.45f - crouch + hop - buckle * 0.6f)
+        set(PELVIS, sway - 0.05f * hp, 0.9f - crouch + hop - buckle)
+        set(CHEST, 0.02f + sway - 0.03f * draw + lean * 0.6f, 1.24f + breathe - crouch + hop - buckle)
+        set(NECK, 0.03f + sway - 0.03f * draw + lean, 1.52f + breathe - crouch + hop - buckle * 1.1f)
         if (cheer) {
             // Victory: bow raised high, other fist pumping.
             val pump = sin(time * 7f) * 0.08f
@@ -114,9 +129,11 @@ class Ragdoll(var rootX: Float, var rootY: Float, val facing: Float) {
             set(L_ELBOW, -0.2f, 1.72f + hop + pump); set(L_HAND, -0.26f, 2.0f + hop + pump * 1.5f)
             return
         }
-        val ca = cos(aim); val sa = sin(aim)
-        // The head leans into the aim, cheek near the string.
-        set(HEAD, 0.05f + sway + ca * 0.02f - 0.03f * draw, 1.74f + breathe - crouch + sa * 0.05f)
+        // Hurt: the bow arm drops away from the aim.
+        val effAim = aim * (1f - hp) - 0.7f * hp
+        val ca = cos(effAim); val sa = sin(effAim)
+        // The head leans into the aim, cheek near the string (snaps back when hurt).
+        set(HEAD, 0.05f + sway + ca * 0.02f - 0.03f * draw + lean * 1.4f, 1.74f + breathe - crouch + sa * 0.05f - buckle * 1.2f + 0.04f * hp)
         // Front arm holds the bow along the aim (kicks back a bit on release); back arm draws the string.
         val reach = 0.58f - 0.07f * recoil
         set(R_ELBOW, 0.03f + sway + ca * 0.3f, 1.47f - crouch + sa * 0.3f)
@@ -124,6 +141,33 @@ class Ragdoll(var rootX: Float, var rootY: Float, val facing: Float) {
         val pull = (0.58f - 0.5f * draw - 0.62f * recoil).coerceAtLeast(-0.12f)
         set(L_HAND, 0.03f + sway + ca * pull - sa * 0.05f * recoil, 1.47f - crouch + sa * pull + 0.08f * recoil)
         set(L_ELBOW, 0.03f + sway + ca * pull * 0.5f - sa * 0.18f * draw - 0.12f * (1 - draw), 1.47f - crouch + sa * pull * 0.5f + ca * 0.18f * draw - 0.1f * (1 - draw) + 0.06f * recoil)
+        if (hp > 0f) {
+            // The free hand goes to the wound.
+            val wx = (hurtRelX * facing).coerceIn(-0.3f, 0.3f)
+            val wy = hurtRelY.coerceIn(0.5f, 1.6f) - buckle
+            val k = (hp * 1.4f).coerceAtMost(1f)
+            poseX[L_HAND] += ((rootX + (wx + 0.12f) * facing) - poseX[L_HAND]) * k
+            poseY[L_HAND] += ((rootY + wy) - poseY[L_HAND]) * k
+            poseX[L_ELBOW] += ((rootX + (wx + 0.28f) * facing) - poseX[L_ELBOW]) * k
+            poseY[L_ELBOW] += ((rootY + (wy + 1.4f) / 2f) - poseY[L_ELBOW]) * k
+        }
+    }
+
+    private fun easeHurt(t: Float): Float {
+        // t goes 1 → 0; full pain for the first moments, then a smooth recovery.
+        val u = 1f - t
+        return if (u < 0.15f) 1f else (1f - (u - 0.15f) / 0.85f).let { it * it * (3f - 2f * it) }
+    }
+
+    /**
+     * A hit that didn't kill: pain pose and a shove of [knock] meters in the arrow's direction ([dir] = ±1).
+     * Enough shoves push the archer off the edge of its platform.
+     */
+    fun hurtBy(hitX: Float, hitY: Float, dir: Float, knock: Float) {
+        hurt = 1f
+        hurtRelX = hitX - rootX
+        hurtRelY = hitY - rootY
+        rootTargetX += dir * knock
     }
 
     /** Pushes the point nearest to the hit and the ones around it. */
@@ -147,6 +191,9 @@ class Ragdoll(var rootX: Float, var rootY: Float, val facing: Float) {
     fun revive() {
         alive = true
         cheer = false
+        hurt = 0f
+        rootX = homeX
+        rootTargetX = homeX
         sinceHit = 9f
         buildPose()
         for (i in 0 until N) { x[i] = poseX[i]; y[i] = poseY[i]; px[i] = x[i]; py[i] = y[i] }
@@ -157,6 +204,9 @@ class Ragdoll(var rootX: Float, var rootY: Float, val facing: Float) {
         time += dt
         recoil *= exp(-dt * 7f)
         if (alive) {
+            hurt = (hurt - dt / HURT_TIME).coerceAtLeast(0f)
+            // Stagger: the feet slide back quickly after a shove.
+            rootX += (rootTargetX - rootX) * min(1f, dt * 9f)
             buildPose()
             // Springs back to the pose: soft right after a hit (a flinch), then firm.
             val k = if (sinceHit < 0.25f) 0.08f else 0.35f
@@ -356,6 +406,8 @@ sealed class DuelEvent {
     data class Frozen(val x: Float, val y: Float) : DuelEvent()
     data class Thaw(val x: Float, val y: Float) : DuelEvent()
     data class Heal(val amount: Int, val x: Float, val y: Float) : DuelEvent()
+    /** Shoved off the edge of a high platform: the fall kills ([enemy] = the enemy fell). */
+    data class Fell(val enemy: Boolean, val x: Float, val y: Float) : DuelEvent()
     /** Scenery bonus hit (0 bird, 1 balloon), from [ArcheryGame]. */
     data class Bonus(val kind: Int, val x: Float, val y: Float) : DuelEvent()
 }
@@ -586,6 +638,7 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
         enemy.waterY = wy
         player.step(dt, solid)
         enemy.step(dt, solid)
+        checkFalls(events)
         var i = inFlight.size - 1
         while (i >= 0) {
             if (i < inFlight.size) stepArrow(inFlight[i], dt, events)
@@ -709,6 +762,7 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
             // A fast killing arrow goes right through and keeps flying.
             val pierce = kill && speed > PIERCE_SPEED && part != Part.ARM && a.kind != ArrowKind.BOMB
             if (kill) target.kill(a.vx * (if (pierce) 1.2f else 0.9f), a.vy * 0.9f + 2f, near)
+            else if (wasAlive && target.alive) target.hurtBy(hx, hy, if (a.vx >= 0f) 1f else -1f, knockFor(part, a) * (if (dmg == 0) 0.4f else 1f))
             events.add(DuelEvent.Hit(a.byPlayer, part, dmg, hx, hy, kill, a.kind, pierce))
             if (a.kind == ArrowKind.ICE && a.byPlayer && !kill && wasAlive) {
                 enemyFrozen = true
@@ -757,6 +811,47 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
         }
     }
 
+    /** How far a non-lethal hit shoves the archer back (meters). */
+    private fun knockFor(part: Part, a: Arrow): Float {
+        val base = when (part) {
+            Part.HEAD -> 0.55f
+            Part.TORSO -> 0.42f
+            Part.LEG -> 0.3f
+            Part.ARM -> 0.22f
+        }
+        val speed = sqrt(a.vx * a.vx + a.vy * a.vy)
+        // The player is shoved a bit less (losing by falling should be rare and earned).
+        return base * (0.6f + 0.4f * (speed / MAX_SPEED)) * (if (a.kind == ArrowKind.FIRE) 1.2f else 1f) * (if (a.byPlayer) 1f else 0.65f)
+    }
+
+    /** An archer shoved past the edge of a high platform falls and dies. */
+    private fun checkFalls(events: MutableList<DuelEvent>) {
+        if (killed) return
+        for (q in 0..1) {
+            val r = if (q == 0) player else enemy
+            if (!r.alive) continue
+            val p = platforms[q]
+            val high = liquid || p.top - groundY > 0.5f
+            if (!high) {
+                // On the ground: just stops at the platform edge's line... nothing to fall from.
+                continue
+            }
+            val out = r.rootX < p.x0 + 0.02f || r.rootX > p.x1 - 0.02f
+            if (!out) continue
+            val dir = if (r.rootX < (p.x0 + p.x1) / 2f) -1f else 1f
+            if (q == 0) { playerHp = 0; killByPlayer = false } else { enemyHp = 0; killByPlayer = true }
+            killed = true
+            r.kill(dir * 2.5f, 1.5f, Ragdoll.PELVIS)
+            events.add(DuelEvent.Fell(q == 1, r.x[Ragdoll.PELVIS], r.y[Ragdoll.PELVIS]))
+            if (inFlight.isEmpty() && turn != Turn.OVER) {
+                playerWon = killByPlayer
+                (if (killByPlayer) player else enemy).cheer = true
+                turn = Turn.OVER
+                overTime = 0f
+            }
+        }
+    }
+
     /** Takes [dmg] off the other archer; true when it was the killing blow. */
     private fun applyDamage(byPlayer: Boolean, dmg: Int): Boolean {
         if (killed) return false
@@ -789,7 +884,10 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
             val nx = if (d > 1e-3f) dx / d else 0f
             val ny = if (d > 1e-3f) dy / d else 1f
             if (kill) target.kill(nx * push * 1.5f, ny * push + 5f, Ragdoll.CHEST)
-            else for (p in 0 until Ragdoll.N) target.impulse(p, nx * push * 0.4f, ny * push * 0.4f + 1f)
+            else if (target.alive) {
+                for (p in 0 until Ragdoll.N) target.impulse(p, nx * push * 0.4f, ny * push * 0.4f + 1f)
+                target.hurtBy(x, y, if (nx >= 0f) 1f else -1f, 0.35f + push * 0.06f)
+            }
         }
         events.add(DuelEvent.Explode(a.byPlayer, x, y, dmg, kill))
         land(a, events)

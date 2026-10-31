@@ -148,6 +148,7 @@
     <string name="world_volcano">Vulcão</string>
     <string name="world_x">Mundo %1$d</string>
     <string name="your_turn">Sua vez</string>
+    <string name="title_fall">DESPENCOU!</string>
     <string name="lv_x">Nv %1$d</string>
     <string name="boss_shield">Escudo mágico: quebra com 2 acertos</string>
     <string name="boss_focus">Mestre arqueiro: quase nunca erra</string>

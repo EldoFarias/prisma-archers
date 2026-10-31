@@ -1444,6 +1444,11 @@ class ArcheryPainter {
                         val e = hr * 0.14f
                         drawLine(OUTLINE_C, Offset(ex - e, ey - e), Offset(ex + e, ey + e), hr * 0.08f, StrokeCap.Round)
                         drawLine(OUTLINE_C, Offset(ex - e, ey + e), Offset(ex + e, ey - e), hr * 0.08f, StrokeCap.Round)
+                    } else if (r.hurt > 0.3f) {
+                        // Pain: eyes squeezed shut ( > )
+                        val e = hr * 0.13f
+                        drawLine(OUTLINE_C, Offset(ex - e, ey - e), Offset(ex + e * 0.6f, ey), hr * 0.08f, StrokeCap.Round)
+                        drawLine(OUTLINE_C, Offset(ex + e * 0.6f, ey), Offset(ex - e, ey + e), hr * 0.08f, StrokeCap.Round)
                     } else if ((r.time % 3.7f) < 0.12f || r.sinceHit < 0.2f) {
                         drawLine(OUTLINE_C, Offset(ex - hr * 0.14f, ey), Offset(ex + hr * 0.14f, ey), hr * 0.07f, StrokeCap.Round)
                     } else {
@@ -1452,13 +1457,13 @@ class ArcheryPainter {
                         drawCircle(Color.White, hr * 0.035f, Offset(ex + hr * 0.08f, ey - hr * 0.04f - aimLook * hr * 0.06f))
                     }
                     // Brow: frowning while drawing the bow
-                    val frown = r.draw * hr * 0.1f
+                    val frown = (r.draw + r.hurt * 1.5f) * hr * 0.1f
                     drawLine(HAIR_C, Offset(ex - hr * 0.18f, ey - hr * 0.3f - frown * 0.3f), Offset(ex + hr * 0.18f, ey - hr * 0.28f + frown), hr * 0.07f, StrokeCap.Round)
                     // Nose and mouth
                     drawCircle(Palette.darker(skin, 0.1f), hr * 0.1f, Offset(hx + hr * 0.92f, hy + hr * 0.1f))
                     if (r.cheer) {
                         drawArc(OUTLINE_C, 0f, 180f, true, Offset(hx + hr * 0.38f, hy + hr * 0.3f), Size(hr * 0.42f, hr * 0.3f))
-                    } else if (!r.alive || r.sinceHit < 0.4f) {
+                    } else if (!r.alive || r.sinceHit < 0.4f || r.hurt > 0.2f) {
                         drawOval(OUTLINE_C, Offset(hx + hr * 0.5f, hy + hr * 0.36f), Size(hr * 0.18f, hr * 0.2f))
                     } else {
                         drawLine(Color(0x88000000), Offset(hx + hr * 0.42f, hy + hr * 0.45f), Offset(hx + hr * 0.7f, hy + hr * 0.42f), hr * 0.07f, StrokeCap.Round)

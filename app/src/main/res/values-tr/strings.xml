@@ -148,6 +148,7 @@
     <string name="world_volcano">Yanardağ</string>
     <string name="world_x">Dünya %1$d</string>
     <string name="your_turn">Senin sıran</string>
+    <string name="title_fall">UÇURUMA!</string>
     <string name="lv_x">Sv %1$d</string>
     <string name="boss_shield">Sihirli kalkan: 2 vuruşta kırılır</string>
     <string name="boss_focus">Usta okçu: neredeyse hiç ıskalamaz</string>

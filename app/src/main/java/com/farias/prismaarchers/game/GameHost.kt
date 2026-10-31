@@ -527,6 +527,11 @@ class GameHost(context: Context) {
             is DuelEvent.Frozen -> sound.play(Sfx.GLASS, 0.8f, 1.6f)
             is DuelEvent.Thaw -> sound.play(Sfx.GLASS, 0.6f, 0.9f)
             is DuelEvent.Heal -> sound.play(Sfx.REVIVE, 0.6f, 1.3f)
+            is DuelEvent.Fell -> {
+                sound.play(Sfx.WHOOSH, 1f, 0.7f)
+                haptic(Haptic.HEAVY)
+                if (e.enemy) showTitle(R.string.title_fall, 100)
+            }
             is DuelEvent.Bonus -> {
                 sound.play(Sfx.COIN, 1f, 1.2f)
                 if (e.kind == Prop.BIRD) showTitle(R.string.title_bird, 25, BIRD_COINS)

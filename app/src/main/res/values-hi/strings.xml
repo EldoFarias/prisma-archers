@@ -148,6 +148,7 @@
     <string name="world_volcano">ज्वालामुखी</string>
     <string name="world_x">दुनिया %1$d</string>
     <string name="your_turn">आपकी बारी</string>
+    <string name="title_fall">नीचे गिरा!</string>
     <string name="lv_x">स्तर %1$d</string>
     <string name="boss_shield">जादुई ढाल: 2 वार में टूटती है</string>
     <string name="boss_focus">माहिर तीरंदाज़: लगभग कभी नहीं चूकता</string>
