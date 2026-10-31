@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: android-build
@@ -18,7 +18,7 @@ jobs:
     env:
       VERSION_CODE: ${{ github.run_number }}
       HAS_KEYSTORE: ${{ secrets.KEYSTORE_BASE64 != '' }}
-      # Optional: your real AdMob ids as repository secrets (release builds only).
+      # Real AdMob ids (repository secrets). The release build fails if any is missing or is a test id.
       ADMOB_APP_ID: ${{ secrets.ADMOB_APP_ID }}
       ADMOB_BANNER_ID: ${{ secrets.ADMOB_BANNER_ID }}
       ADMOB_INTERSTITIAL_ID: ${{ secrets.ADMOB_INTERSTITIAL_ID }}
@@ -37,48 +37,29 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Build test APK (debug, test ads)
+      - name: Decode keystore
+        run: |
+          if [ "$HAS_KEYSTORE" != "true" ]; then echo "::error::Falta o secret KEYSTORE_BASE64"; exit 1; fi
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          echo "KEYSTORE_PATH=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
+
+      - name: Build release AAB (Play Store)
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           chmod +x gradlew
           set -o pipefail
-          if ! ./gradlew --no-daemon assembleDebug 2>&1 | tee build.log; then
+          if ! ./gradlew --no-daemon bundleRelease 2>&1 | tee build.log; then
             # Surface compiler / build errors as annotations (readable via the API).
             grep -E "^e: |error:|What went wrong|> .*(failed|Could not|not found)" build.log | head -40 | while IFS= read -r line; do
               echo "::error::${line}"
             done
             exit 1
           fi
-          cp app/build/outputs/apk/debug/app-debug.apk PrismaArchers-teste.apk
-
-      - name: Publish test APK (easy download on the phone)
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: teste
-          name: "APK de teste (build ${{ github.run_number }})"
-          body: |
-            Baixe **PrismaArchers-teste.apk** no celular e instale.
-            Build ${{ github.run_number }} — commit ${{ github.sha }}.
-            Esta versão usa anúncios de TESTE do Google.
-          prerelease: true
-          make_latest: false
-          files: PrismaArchers-teste.apk
-
-      - name: Decode keystore
-        if: env.HAS_KEYSTORE == 'true'
-        run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/upload.jks"
-          echo "KEYSTORE_PATH=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
-
-      - name: Build release AAB (for Play Store)
-        if: env.HAS_KEYSTORE == 'true'
-        env:
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: ./gradlew --no-daemon bundleRelease
 
       - name: Upload AAB
-        if: env.HAS_KEYSTORE == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: PrismaArchers-release-aab

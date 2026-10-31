@@ -8,7 +8,10 @@ sem outras redes, sem assinatura, sem compras no app.
 
 ## Como compilar e rodar
 
-- Cada push na `main` gera o APK em Releases → `teste` (`PrismaArchers-teste.apk`, `.github/workflows/android.yml`).
+- Cada push na `main` gera o AAB assinado de release (artefato `PrismaArchers-release-aab` do Actions,
+  `.github/workflows/android.yml`) para enviar à Play Store; não há mais APK em Releases.
+- Chave de upload: `Projetos/PrismaArchers-Keystore` (fora do repo; senha no LEIA-ME de lá). Secrets `KEYSTORE_*` e
+  `ADMOB_*` já cadastrados (app AdMob `ca-app-pub-1312827233427949~7957997517`).
   Erros de compilação aparecem como anotações do job (`gh api repos/EldoFarias/prisma-archers/check-runs/<job>/annotations`).
 - Debug usa sempre IDs de **teste** do AdMob (pacote `com.farias.prismaarchers.debug`); release lê os IDs reais dos
   secrets `ADMOB_*` e **falha** se faltar algum ou se for ID de teste. `applicationId` = `com.farias.prismaarchers`.
