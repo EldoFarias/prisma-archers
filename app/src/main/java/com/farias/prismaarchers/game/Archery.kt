@@ -395,6 +395,8 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
     enum class Turn { PLAYER, PLAYER_ARROW, ENEMY, ENEMY_ARROW, OVER }
 
     val platforms: List<Platform>
+    /** Height of the ground below the two towers. */
+    val groundY: Float
     val player: Ragdoll
     val enemy: Ragdoll
     var enemyHp = spec.enemyHp
@@ -438,9 +440,12 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
     init {
         val ex = spec.distance
         val ey = spec.heightDiff
+        groundY = min(0f, ey) - GROUND_DEPTH
         platforms = listOf(
             Platform(-3.5f, 1.2f, 0f),
             Platform(ex - 1.2f, ex + 3.5f, ey),
+            // The ground (street, sea, sand…) far below: arrows and fallen bodies end up there.
+            Platform(-80f, ex + 80f, groundY, 60f),
         )
         player = Ragdoll(0f, 0f, 1f)
         enemy = Ragdoll(ex, ey, -1f)
@@ -535,7 +540,7 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
             Turn.OVER -> {
                 overTime += dt
                 val loser = if (playerWon) enemy else player
-                if (!finished && (loser.settled(dt) || overTime > 4f)) {
+                if (!finished && (loser.settled(dt) || overTime > 2.2f)) {
                     finished = true
                     events.add(DuelEvent.Over(playerWon))
                 }
@@ -827,6 +832,8 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
         var PLAYER_HEAD_DAMAGE = 50
         const val MIN_SPEED = 9f
         const val PIERCE_SPEED = 20f
+        /** How far below the lower tower top the ground is (meters). */
+        const val GROUND_DEPTH = 10f
         const val SHIELD_R = 1.25f
         const val BLAST_R = 2.2f
         const val BLAST_DAMAGE = 55

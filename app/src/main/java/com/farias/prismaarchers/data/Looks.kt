@@ -69,9 +69,36 @@ class World(
     val rockTop: Long,
     /** 0 none, 1 snow, 2 embers, 3 petals, 4 stars, 5 leaves. */
     val air: Int,
-    /** 0 hills, 1 peaks, 2 dunes, 3 volcano, 4 castle, 5 forest. */
+    /** 0 hills, 1 peaks, 2 dunes, 3 volcano, 4 castle, 5 forest, 6 city skyline. */
     val scenery: Int,
+    /** What the archers stand on (TowerStyle). */
+    val base: Int = TowerStyle.CLIFF,
+    /** What lies far below them (GroundStyle). */
+    val ground: Int = GroundStyle.SEA,
 )
+
+/** The pillar under each archer, from the top down to the ground. */
+object TowerStyle {
+    const val CLIFF = 0
+    const val MESA = 1
+    const val MOUNTAIN = 2
+    const val BUILDING = 3
+    const val CASTLE = 4
+    const val STONE = 5
+}
+
+/** The ground far below the platforms. */
+object GroundStyle {
+    const val SEA = 0
+    const val STREET = 1
+    const val LAVA = 2
+    const val SAND = 3
+    const val SNOW = 4
+    const val GRASS = 5
+
+    /** Arrows and bodies sink instead of lying on it. */
+    fun liquid(g: Int) = g == SEA || g == LAVA
+}
 
 enum class Rarity { COMMON, RARE, EPIC, LEGENDARY }
 
@@ -112,14 +139,14 @@ object Looks {
     ).sortedBy { it.price }
 
     val worlds = listOf(
-        World(R.string.world_meadow, 0x7DD3FC, 0xE0F2FE, 0xFFF7D6, 0x93C5FD, 0x4ADE80, 0x78716C, 0x22C55E, 5, 0),
-        World(R.string.world_desert, 0xFDBA74, 0xFEF3C7, 0xFFFBEB, 0xF59E0B, 0xD97706, 0xA16207, 0xFCD34D, 0, 2),
-        World(R.string.world_snow, 0x93C5FD, 0xF1F5F9, 0xFFFFFF, 0xCBD5E1, 0xE2E8F0, 0x64748B, 0xF8FAFC, 1, 1),
-        World(R.string.world_volcano, 0x450A0A, 0xF97316, 0xFDE047, 0x7F1D1D, 0x292524, 0x1C1917, 0xEA580C, 2, 3),
-        World(R.string.world_night, 0x0B1023, 0x312E81, 0xF1F5F9, 0x1E1B4B, 0x0F172A, 0x334155, 0x6366F1, 4, 5),
-        World(R.string.world_sakura, 0xF9A8D4, 0xFDF2F8, 0xFFF1F2, 0xF472B6, 0xBE185D, 0x6B5563, 0xF9A8D4, 3, 0),
-        World(R.string.world_castle, 0xFB923C, 0xFDE68A, 0xFFF7ED, 0x9A3412, 0x7C2D12, 0x57534E, 0x84CC16, 0, 4),
-        World(R.string.world_jungle, 0x14532D, 0xBBF7D0, 0xF0FDF4, 0x166534, 0x14532D, 0x44403C, 0x16A34A, 5, 5),
+        World(R.string.world_meadow, 0x7DD3FC, 0xE0F2FE, 0xFFF7D6, 0x93C5FD, 0x4ADE80, 0x78716C, 0x22C55E, 5, 0, TowerStyle.CLIFF, GroundStyle.SEA),
+        World(R.string.world_desert, 0xFDBA74, 0xFEF3C7, 0xFFFBEB, 0xF59E0B, 0xD97706, 0xA16207, 0xFCD34D, 0, 2, TowerStyle.MESA, GroundStyle.SAND),
+        World(R.string.world_snow, 0x93C5FD, 0xF1F5F9, 0xFFFFFF, 0xCBD5E1, 0xE2E8F0, 0x64748B, 0xF8FAFC, 1, 1, TowerStyle.MOUNTAIN, GroundStyle.SNOW),
+        World(R.string.world_volcano, 0x450A0A, 0xF97316, 0xFDE047, 0x7F1D1D, 0x292524, 0x1C1917, 0xEA580C, 2, 3, TowerStyle.MOUNTAIN, GroundStyle.LAVA),
+        World(R.string.world_night, 0x0B1023, 0x312E81, 0xF1F5F9, 0x1E1B4B, 0x0F172A, 0x2B3550, 0x475569, 4, 6, TowerStyle.BUILDING, GroundStyle.STREET),
+        World(R.string.world_sakura, 0xF9A8D4, 0xFDF2F8, 0xFFF1F2, 0xF472B6, 0xBE185D, 0x6B5563, 0xF9A8D4, 3, 0, TowerStyle.STONE, GroundStyle.SEA),
+        World(R.string.world_castle, 0xFB923C, 0xFDE68A, 0xFFF7ED, 0x9A3412, 0x7C2D12, 0x57534E, 0x84CC16, 0, 4, TowerStyle.CASTLE, GroundStyle.GRASS),
+        World(R.string.world_jungle, 0x14532D, 0xBBF7D0, 0xF0FDF4, 0x166534, 0x14532D, 0x44403C, 0x16A34A, 5, 5, TowerStyle.CLIFF, GroundStyle.SEA),
     )
 
     fun outfit(id: String) = outfits.firstOrNull { it.id == id } ?: outfits[0]

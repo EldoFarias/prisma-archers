@@ -8,7 +8,7 @@ Puxe o arco, calcule o ângulo e a força e solte a flecha! Em Prisma Archers vo
 ★ FASES INFINITAS
 • Inimigos cada vez mais certeiros, distâncias maiores e vento mais forte
 • Duelo chefe a cada 10 fases, com armadura e prêmio triplo
-• Mapa de mundos: campo, deserto, montanhas nevadas, vulcão, noite estrelada, sakura, castelo e selva
+• Mundos: penhascos sobre o mar, prédios sobre a rua, campo, deserto, montanhas nevadas, vulcão, cidade neon, sakura, castelo e selva
 
 ★ SOBREVIVÊNCIA
 • Um inimigo atrás do outro: quantos você derruba?

@@ -24,7 +24,7 @@ L["pt-BR"] = dict(
 ★ FASES INFINITAS
 • Inimigos cada vez mais certeiros, distâncias maiores e vento mais forte
 • Duelo chefe a cada 10 fases, com armadura e prêmio triplo
-• Mapa de mundos: campo, deserto, montanhas nevadas, vulcão, noite estrelada, sakura, castelo e selva
+• Mundos: penhascos sobre o mar, prédios sobre a rua, campo, deserto, montanhas nevadas, vulcão, cidade neon, sakura, castelo e selva
 
 ★ SOBREVIVÊNCIA
 • Um inimigo atrás do outro: quantos você derruba?
@@ -63,7 +63,7 @@ L["en-US"] = dict(
 ★ ENDLESS LEVELS
 • Sharper enemies, longer distances and stronger wind as you go
 • A boss duel every 10 levels, armored and with a triple reward
-• World map: meadow, desert, snowy peaks, volcano, starry night, sakura, castle and jungle
+• World map: meadow, desert, snowy peaks, volcano, neon city, sakura, castle and jungle
 
 ★ SURVIVAL
 • One enemy after another: how many can you take down?
@@ -102,7 +102,7 @@ L["es-ES"] = dict(
 ★ NIVELES INFINITOS
 • Enemigos más certeros, distancias mayores y viento más fuerte
 • Duelo de jefe cada 10 niveles, con armadura y premio triple
-• Mapa de mundos: pradera, desierto, picos nevados, volcán, noche estrellada, sakura, castillo y selva
+• Mapa de mundos: pradera, desierto, picos nevados, volcán, ciudad neón, sakura, castillo y selva
 
 ★ SUPERVIVENCIA
 • Un enemigo tras otro: ¿cuántos puedes derribar?
@@ -141,7 +141,7 @@ L["fr-FR"] = dict(
 ★ NIVEAUX INFINIS
 • Des ennemis plus précis, des distances plus longues et un vent plus fort
 • Un duel de boss tous les 10 niveaux, en armure et avec récompense triple
-• Carte des mondes : prairie, désert, pics enneigés, volcan, nuit étoilée, sakura, château et jungle
+• Carte des mondes : prairie, désert, pics enneigés, volcan, ville néon, sakura, château et jungle
 
 ★ SURVIE
 • Un ennemi après l'autre : combien peux-tu en abattre ?
@@ -180,7 +180,7 @@ L["de-DE"] = dict(
 ★ ENDLOSE LEVEL
 • Treffsicherere Gegner, größere Entfernungen und stärkerer Wind
 • Alle 10 Level ein Boss-Duell, gepanzert und mit dreifacher Belohnung
-• Weltkarte: Wiese, Wüste, Schneegipfel, Vulkan, Sternennacht, Sakura, Burg und Dschungel
+• Weltkarte: Wiese, Wüste, Schneegipfel, Vulkan, Neonstadt, Sakura, Burg und Dschungel
 
 ★ ÜBERLEBEN
 • Ein Gegner nach dem anderen: Wie viele schaffst du?
@@ -219,7 +219,7 @@ L["tr-TR"] = dict(
 ★ SONSUZ BÖLÜMLER
 • Daha isabetli düşmanlar, daha uzun mesafeler ve daha sert rüzgar
 • Her 10 bölümde zırhlı ve üç kat ödüllü patron düellosu
-• Dünya haritası: çayır, çöl, karlı zirveler, yanardağ, yıldızlı gece, sakura, kale ve orman
+• Dünya haritası: çayır, çöl, karlı zirveler, yanardağ, neon şehir, sakura, kale ve orman
 
 ★ HAYATTA KALMA
 • Bir düşman bitince diğeri gelir: kaçını yenebilirsin?
@@ -258,7 +258,7 @@ L["id"] = dict(
 ★ LEVEL TANPA AKHIR
 • Musuh makin jitu, jarak makin jauh, angin makin kencang
 • Duel bos setiap 10 level, berbaju zirah dengan hadiah tiga kali
-• Peta dunia: padang, gurun, puncak salju, gunung api, malam berbintang, sakura, kastil, dan hutan
+• Peta dunia: padang, gurun, puncak salju, gunung api, kota neon, sakura, kastil, dan hutan
 
 ★ BERTAHAN
 • Satu musuh demi satu: berapa yang bisa kamu jatuhkan?
@@ -297,7 +297,7 @@ L["hi-IN"] = dict(
 ★ अनगिनत लेवल
 • ज़्यादा सटीक दुश्मन, लंबी दूरी और तेज़ हवा
 • हर 10 लेवल पर कवच वाला बॉस और तीन गुना इनाम
-• दुनिया का नक्शा: मैदान, रेगिस्तान, बर्फ़ीली चोटियाँ, ज्वालामुखी, तारों भरी रात, साकुरा, किला और जंगल
+• दुनिया का नक्शा: मैदान, रेगिस्तान, बर्फ़ीली चोटियाँ, ज्वालामुखी, नियॉन शहर, साकुरा, किला और जंगल
 
 ★ सर्वाइवल
 • एक के बाद एक दुश्मन: आप कितनों को हरा सकते हैं?

@@ -181,6 +181,8 @@ class GameHost(context: Context) {
 
     private fun setOpponent(spec: LevelSpec, worldLevel: Int) {
         world = Looks.world(worldLevel)
+        game.liquidGround = com.farias.prismaarchers.data.GroundStyle.liquid(world.ground)
+        game.lavaGround = world.ground == com.farias.prismaarchers.data.GroundStyle.LAVA
         enemyOutfit = Looks.enemyOutfit(spec.number, spec.boss)
         enemyBow = Looks.enemyBow(spec.number)
         windKmh = game.duel.windKmh()
@@ -401,7 +403,9 @@ class GameHost(context: Context) {
             return
         }
         val kind = if (selectedArrow != ArrowKind.NORMAL && Progress.arrowCount(selectedArrow) > 0) selectedArrow else ArrowKind.NORMAL
-        if (game.release(angle, power, kind) && kind != ArrowKind.NORMAL) {
+        val shot = game.release(angle, power, kind)
+        if (shot && !Progress.tutorialDone) Progress.markTutorial(true)
+        if (shot && kind != ArrowKind.NORMAL) {
             Progress.useArrow(kind)
             selectedArrow = ArrowKind.NORMAL
         }

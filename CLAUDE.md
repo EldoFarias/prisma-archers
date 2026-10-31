@@ -43,6 +43,10 @@ sem outras redes, sem assinatura, sem compras no app.
 - Flecha rápida que mata atravessa (`PIERCE_SPEED`); capacete voa no 1º tiro na cabeça (`helmetOn`).
 - Chefes com habilidade (`BossPower`, pela armadura): cavaleiro = bolha que aguenta 2 acertos, samurai = mira melhor,
   viking = 2 flechas, rei = se cura a cada turno.
+- Torres com base: cada mundo tem `World.base` (`TowerStyle`: penhasco, mesa, montanha, prédio, castelo, pedra) e
+  `World.ground` (`GroundStyle`: mar, rua com carros, lava, areia, neve, grama) `GROUND_DEPTH` (10 m) abaixo da torre
+  mais baixa; o chão é a 3ª plataforma do `Duel` (flechas e corpos caem nele; no mar/lava afundam).
+- Câmera do golpe final: segue a flecha até o impacto e acaba `KILL_CAM_AFTER` (1,3 s) depois, sempre no corpo.
 - Sobrevivência (`GameHost.playEndless`): um inimigo atrás do outro (`survivalSpec(k)`), +25 de vida entre eles;
   recorde em `Progress.bestEndless` (inimigos derrotados).
 

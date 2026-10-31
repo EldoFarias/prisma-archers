@@ -135,8 +135,8 @@ fun GameScreen(host: GameHost, ads: AdsManager, sound: SoundManager, onGreatMome
                     }
                 },
         )
-        // Pull indicator
-        Canvas(Modifier.fillMaxSize()) {
+        // Pull indicator: only until the very first shot (after that the archer's gauge is the reference).
+        if (!Progress.tutorialDone) Canvas(Modifier.fillMaxSize()) {
             if (!dragging.value) return@Canvas
             val s = Offset(startX.floatValue, startY.floatValue)
             val n = Offset(nowX.floatValue, nowY.floatValue)

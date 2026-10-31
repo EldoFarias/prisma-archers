@@ -8,7 +8,7 @@ Bande l'arc, évalue l'angle et la puissance, et lâche la flèche ! Dans Prisma
 ★ NIVEAUX INFINIS
 • Des ennemis plus précis, des distances plus longues et un vent plus fort
 • Un duel de boss tous les 10 niveaux, en armure et avec récompense triple
-• Carte des mondes : prairie, désert, pics enneigés, volcan, nuit étoilée, sakura, château et jungle
+• Carte des mondes : prairie, désert, pics enneigés, volcan, ville néon, sakura, château et jungle
 
 ★ SURVIE
 • Un ennemi après l'autre : combien peux-tu en abattre ?

@@ -1211,6 +1211,7 @@ T = {
 
 ADD2 = {
 "en": {
+    'world_night': 'Neon City',
     'lv_x': 'Lv %1$d',
     'boss_shield': 'Magic shield: breaks after 2 hits',
     'boss_focus': 'Master archer: almost never misses',
@@ -1257,6 +1258,7 @@ ADD2 = {
     'you_have_x': 'You have %1$d',
 },
 "pt": {
+    'world_night': 'Cidade Neon',
     'lv_x': 'Nv %1$d',
     'boss_shield': 'Escudo mágico: quebra com 2 acertos',
     'boss_focus': 'Mestre arqueiro: quase nunca erra',
@@ -1303,6 +1305,7 @@ ADD2 = {
     'you_have_x': 'Você tem %1$d',
 },
 "es": {
+    'world_night': 'Ciudad Neón',
     'lv_x': 'Nv %1$d',
     'boss_shield': 'Escudo mágico: se rompe con 2 impactos',
     'boss_focus': 'Maestro arquero: casi nunca falla',
@@ -1349,6 +1352,7 @@ ADD2 = {
     'you_have_x': 'Tienes %1$d',
 },
 "fr": {
+    'world_night': 'Ville Néon',
     'lv_x': 'Niv %1$d',
     'boss_shield': 'Bouclier magique : cède après 2 coups',
     'boss_focus': 'Maître archer : ne rate presque jamais',
@@ -1395,6 +1399,7 @@ ADD2 = {
     'you_have_x': 'Tu en as %1$d',
 },
 "de": {
+    'world_night': 'Neonstadt',
     'lv_x': 'Lv %1$d',
     'boss_shield': 'Magischer Schild: bricht nach 2 Treffern',
     'boss_focus': 'Meisterschütze: verfehlt fast nie',
@@ -1441,6 +1446,7 @@ ADD2 = {
     'you_have_x': 'Du hast %1$d',
 },
 "tr": {
+    'world_night': 'Neon Şehir',
     'lv_x': 'Sv %1$d',
     'boss_shield': 'Sihirli kalkan: 2 vuruşta kırılır',
     'boss_focus': 'Usta okçu: neredeyse hiç ıskalamaz',
@@ -1487,6 +1493,7 @@ ADD2 = {
     'you_have_x': '%1$d tane var',
 },
 "in": {
+    'world_night': 'Kota Neon',
     'lv_x': 'Lv %1$d',
     'boss_shield': 'Perisai sihir: pecah setelah 2 kena',
     'boss_focus': 'Pemanah ahli: hampir tak pernah meleset',
@@ -1533,6 +1540,7 @@ ADD2 = {
     'you_have_x': 'Kamu punya %1$d',
 },
 "hi": {
+    'world_night': 'नियॉन शहर',
     'lv_x': 'स्तर %1$d',
     'boss_shield': 'जादुई ढाल: 2 वार में टूटती है',
     'boss_focus': 'माहिर तीरंदाज़: लगभग कभी नहीं चूकता',

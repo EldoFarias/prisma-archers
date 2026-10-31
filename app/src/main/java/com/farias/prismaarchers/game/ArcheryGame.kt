@@ -75,6 +75,11 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         private set
     private var killCamOn = false
     private var killArrow: Arrow? = null
+    /** Clock time of the killing blow in this duel (-1 = none yet). */
+    private var killAt = -1f
+    /** Water or lava below: arrows and bodies splash and sink. 0 water, 1 lava. */
+    var liquidGround = false
+    var lavaGround = false
     /** Burning (fire arrow) until this clock time, per side. */
     var enemyBurnUntil = -1f
         private set
@@ -121,6 +126,7 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         overWait = -1f
         killCamOn = false
         killArrow = null
+        killAt = -1f
         recorder.reset()
         burst(duel.player.x[Ragdoll.CHEST], duel.player.y[Ragdoll.CHEST], 40, REVIVE_SPARK, 4f)
     }
@@ -148,6 +154,7 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         killCam = 0f
         killCamOn = false
         killArrow = null
+        killAt = -1f
         enemyBurnUntil = -1f
         playerBurnUntil = -1f
         overview = false
@@ -245,8 +252,9 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         }
         if (killCamOn) {
             val a = killArrow
-            val missed = d.turn != Duel.Turn.OVER && (a == null || a !in d.inFlight)
-            if (missed || (d.turn == Duel.Turn.OVER && clock > slowUntil)) {
+            val missed = killAt < 0f && (a == null || a !in d.inFlight)
+            // Ends shortly after the blow lands (the body's fall is the last beat).
+            if (missed || (killAt >= 0f && clock > killAt + KILL_CAM_AFTER)) {
                 killCamOn = false
                 killArrow = null
             }
@@ -276,7 +284,8 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
     /** A puff of dust when a falling body slams into the ground. */
     private fun dust(r: Ragdoll) {
         if (r.thud > 0.035f) {
-            burst(r.thudX, r.thudY + 0.05f, (10 + r.thud * 300).toInt().coerceAtMost(30), DUST, 1.5f + r.thud * 30f)
+            val wet = liquidGround && r.thudY <= duel.groundY + 0.1f
+            burst(r.thudX, r.thudY + 0.05f, (10 + r.thud * 300).toInt().coerceAtMost(if (wet) 50 else 30), if (wet) (if (lavaGround) FIRE_A else WATER) else DUST, (1.5f + r.thud * 30f) * if (wet) 1.6f else 1f)
             shake = max(shake, (r.thud * 6f).coerceAtMost(0.35f))
         }
         r.thud = 0f
@@ -383,11 +392,18 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         var tw = VIEW_W
         val ka = killArrow
         when {
-            killCamOn && d.turn != Duel.Turn.OVER && ka != null -> {
-                // Kill cam: tight on the arrow.
+            killCamOn && killAt < 0f && ka != null -> {
+                // Kill cam: tight on the arrow until it lands.
                 tx = ka.x + ka.vx * 0.05f
                 ty = ka.y + 0.2f
                 tw = VIEW_W * 0.6f
+            }
+            killAt >= 0f -> {
+                // After the killing blow: on the body (never on an arrow flying on).
+                val loser = if (d.turn == Duel.Turn.OVER) (if (d.playerWon) d.enemy else d.player) else if (d.enemyHp <= 0) d.enemy else d.player
+                tx = loser.x[Ragdoll.PELVIS]
+                ty = loser.y[Ragdoll.PELVIS] + 0.6f
+                tw = VIEW_W * (if (killCamOn) 0.7f else 1f)
             }
             clock < introUntil -> {
                 tx = d.enemy.rootX - VIEW_W * 0.2f
@@ -458,9 +474,22 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
                     if (e.kill || (e.part == Part.HEAD && e.byPlayer)) {
                         slowUntil = clock + if (e.kill) 1.4f else 0.6f
                     }
-                    if (e.kill) recorder.markKill()
+                    if (e.kill) {
+                        recorder.markKill()
+                        killAt = clock
+                        slowUntil = clock + 1.1f
+                    }
                 }
-                is DuelEvent.Miss -> if (e.ground) burst(e.x, e.y, 14, DUST, 2.5f)
+                is DuelEvent.Miss -> if (e.ground) {
+                    if (liquidGround && e.y <= duel.groundY + 0.3f) {
+                        // Splash: the arrow sinks.
+                        burst(e.x, e.y, 26, if (lavaGround) FIRE_A else WATER, 3.5f)
+                        val sunk = duel.arrows.lastOrNull { !it.flying && it.stuckIn == null && abs(it.x - e.x) < 1.2f }
+                        if (sunk != null) duel.arrows.remove(sunk)
+                    } else {
+                        burst(e.x, e.y, 14, DUST, 2.5f)
+                    }
+                }
                 is DuelEvent.Explode -> {
                     burst(e.x, e.y, 70, FIRE_A, 7f)
                     burst(e.x, e.y, 40, FIRE_B, 5f)
@@ -469,7 +498,8 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
                     blastFlash = 1f
                     if (e.damage > 0) texts.add(WorldText("-${e.damage}", e.x, e.y + 0.6f, 0, clock))
                     if (e.kill) {
-                        slowUntil = clock + 1.4f
+                        slowUntil = clock + 1.1f
+                        killAt = clock
                         recorder.markKill()
                     }
                 }
@@ -530,6 +560,9 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         val HEAL_C = floatArrayOf(0.45f, 1f, 0.55f)
         val FEATHER = floatArrayOf(0.95f, 0.95f, 0.98f)
         val BALLOON_C = floatArrayOf(1f, 0.3f, 0.45f)
+        val WATER = floatArrayOf(0.6f, 0.85f, 1f)
+        /** Seconds the kill cam lasts after the blow lands. */
+        const val KILL_CAM_AFTER = 1.3f
     }
 }
 

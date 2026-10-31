@@ -8,7 +8,7 @@ Spann den Bogen, schätz Winkel und Kraft ein und lass den Pfeil fliegen! In Pri
 ★ ENDLOSE LEVEL
 • Treffsicherere Gegner, größere Entfernungen und stärkerer Wind
 • Alle 10 Level ein Boss-Duell, gepanzert und mit dreifacher Belohnung
-• Weltkarte: Wiese, Wüste, Schneegipfel, Vulkan, Sternennacht, Sakura, Burg und Dschungel
+• Weltkarte: Wiese, Wüste, Schneegipfel, Vulkan, Neonstadt, Sakura, Burg und Dschungel
 
 ★ ÜBERLEBEN
 • Ein Gegner nach dem anderen: Wie viele schaffst du?

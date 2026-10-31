@@ -30,7 +30,9 @@ import androidx.compose.runtime.withFrameNanos
 import com.farias.prismaarchers.data.Bow
 import com.farias.prismaarchers.data.BowStyle
 import com.farias.prismaarchers.data.Hat
+import com.farias.prismaarchers.data.GroundStyle
 import com.farias.prismaarchers.data.Outfit
+import com.farias.prismaarchers.data.TowerStyle
 import com.farias.prismaarchers.data.Trails
 import com.farias.prismaarchers.data.World
 import com.farias.prismaarchers.game.Arrow
@@ -201,9 +203,11 @@ class ArcheryPainter {
         // Birds and balloons
         for (p in g.props) drawProp(d, p, g.clock)
         // Platforms with their flags (and torches at night)
-        val torches = world.air == 4 || world.scenery == 3 || world.scenery == 4
-        for ((i, p) in duel.platforms.withIndex()) {
-            drawPlatform(d, p.x0, p.x1, p.top, h, world)
+        val torches = world.scenery == 3 || world.base == TowerStyle.CASTLE
+        drawGround(d, duel.groundY, world, g.clock)
+        for (i in 0..1) {
+            val p = duel.platforms[i]
+            drawPlatform(d, p.x0, p.x1, p.top, duel.groundY, world, g.clock)
             val fx = if (i == 0) p.x0 + 0.55f else p.x1 - 0.55f
             flag(d, fx, p.top, duel.spec.wind, g.clock, if (i == 0) Color(0xFF34D399) else Color(0xFFF43F5E))
             if (torches) torch(d, if (i == 0) p.x1 - 0.25f else p.x0 + 0.25f, p.top, g.clock + i * 1.7f)
@@ -246,6 +250,8 @@ class ArcheryPainter {
         for (a in duel.inFlight) drawArrow(d, a.x, a.y, a.angle, a.byPlayer, if (a.byPlayer) host.playerBow else host.enemyBow, 1f, a.kind, g.clock)
         // Helmet knocked off
         if (g.helmet.active) helmetDebris(d, g.helmet)
+        // Whatever fell into the water/lava is under its surface
+        liquidFront(d, duel.groundY, world, g.clock)
         // Aim guide
         if (g.aiming && g.aimPower > 0.04f && duel.turn == Duel.Turn.PLAYER) {
             val n = g.guide(guide)
@@ -361,7 +367,9 @@ class ArcheryPainter {
         setTransform(rec.cam[i * 3], rec.cam[i * 3 + 1], w / vw, w / 2f, h * 0.6f)
         if (world !== sceneWorld || w != sceneW || h != sceneH) buildScene(world, w, h)
         drawSky(d, w, h, clock, world, host.windKmh)
-        for (p in host.game.duel.platforms) drawPlatform(d, p.x0, p.x1, p.top, h, world)
+        val rd = host.game.duel
+        drawGround(d, rd.groundY, world, clock)
+        for (q in 0..1) drawPlatform(d, rd.platforms[q].x0, rd.platforms[q].x1, rd.platforms[q].top, rd.groundY, world, clock)
         val rp = replayP ?: Ragdoll(0f, 0f, 1f).also { replayP = it }
         val re = replayE ?: Ragdoll(0f, 0f, -1f).also { replayE = it }
         System.arraycopy(rec.pX, i * Ragdoll.N, rp.x, 0, Ragdoll.N)
@@ -378,6 +386,7 @@ class ArcheryPainter {
             val kind = rec.aKind[q]
             drawArrow(d, rec.ax[q], rec.ay[q], rec.aa[q], kind >= 0, if (kind >= 0) host.playerBow else host.enemyBow, 1f, max(0, kind), clock)
         }
+        liquidFront(d, rd.groundY, world, clock)
     }
 
     // ------------------------------------------------------------------ battle extras
@@ -622,7 +631,9 @@ class ArcheryPainter {
         }
         val TAU = 6.2831855f
         val sc = world.scenery
+        fun hash(i: Int) = (((i * 7919 + 13) % 100 + 100) % 100) / 100f
         fun far(u: Float): Float = when (sc) {
+            6 -> w * (0.12f + 0.22f * hash(floor(u * 28f).toInt()))
             1 -> w * (0.12f + 0.2f * jagged(u))
             2 -> w * (0.06f + 0.03f * sin(u * TAU * 2) + 0.02f * sin(u * TAU * 5 + 1f))
             3 -> {
@@ -633,6 +644,7 @@ class ArcheryPainter {
             else -> w * (0.1f + 0.05f * sin(u * TAU * 2 + 0.5f) + 0.03f * sin(u * TAU * 5))
         }
         fun near(u: Float): Float = when (sc) {
+            6 -> w * (0.05f + 0.15f * hash(floor(u * 18f).toInt() + 50))
             1 -> w * (0.04f + 0.09f * jagged((u * 2f + 0.37f) % 1f))
             2 -> w * (0.04f + 0.035f * sin(u * TAU * 3) + 0.015f * sin(u * TAU * 7))
             3 -> w * (0.03f + 0.05f * jagged((u * 3f) % 1f))
@@ -662,7 +674,7 @@ class ArcheryPainter {
             }
             else -> w * (0.04f + 0.025f * sin(u * TAU * 3 + 2f) + 0.012f * sin(u * TAU * 8))
         }
-        fill(farPath, tw, h, if (sc == 1 || sc == 3) 64 else 96, ::far)
+        fill(farPath, tw, h, if (sc == 6) 336 else if (sc == 1 || sc == 3) 64 else 96, ::far)
         fill(nearPath, tw, h, if (sc >= 4) 420 else 140, ::near)
     }
 
@@ -767,49 +779,55 @@ class ArcheryPainter {
         }
     }
 
-    private fun drawPlatform(d: DrawScope, x0: Float, x1: Float, top: Float, h: Float, world: World) {
+    /** One archer's tower, from its top down to the ground, in the world's style, with its top cap. */
+    private fun drawPlatform(d: DrawScope, x0: Float, x1: Float, top: Float, groundY: Float, world: World, clock: Float) {
         val l = sx(x0)
         val r = sx(x1)
         val t = sy(top)
-        if (r < 0f || l > d.size.width || t > h) return
-        val rock = rgb(world.rock)
+        val h = d.size.height
+        val bottom = min(h + 4f, sy(groundY) + 4f)
+        val heightM = top - groundY
+        val spread = when (world.base) { TowerStyle.MOUNTAIN -> 0.5f; TowerStyle.CLIFF -> 0.2f; TowerStyle.MESA -> 0.08f; else -> 0f } * heightM
+        if (r + spread * k < 0f || l - spread * k > d.size.width || t > h) return
         val ol = max(2f, OUTLINE * k * 1.6f)
-        d.drawRect(OUTLINE_C, Offset(l - ol, t), Size(r - l + ol * 2f, h - t + 4f))
-        d.drawRect(rock, Offset(l, t), Size(r - l, h - t + 4f))
-        // Stone blocks with a lit top edge and a shadowed bottom edge
-        val rowH = 0.55f * k
-        val blockW = 1.3f * k
-        val lineW = max(1f, 0.035f * k)
-        var yy = t + 0.2f * k
-        var row = 0
-        val hi = Color.White.copy(alpha = 0.13f)
-        val lo = Color(0x38000000)
-        while (yy < h) {
-            val shift = if (row % 2 == 0) 0.25f * k else 0.9f * k
-            var xx = l - shift
-            var col = 0
-            while (xx < r) {
-                val bx0 = max(l, xx + lineW)
-                val bx1 = min(r, xx + blockW - lineW)
-                if (bx1 > bx0) {
-                    // Slight tone variation per block
-                    val v = (((row * 31 + col * 17) % 7) - 3) * 0.012f
-                    if (v != 0f) d.drawRect(if (v > 0f) Color.White.copy(alpha = v) else Color.Black.copy(alpha = -v), Offset(bx0, yy), Size(bx1 - bx0, rowH - lineW))
-                    d.drawLine(hi, Offset(bx0, yy + lineW), Offset(bx1, yy + lineW), lineW)
-                    d.drawLine(lo, Offset(bx0, yy + rowH - lineW), Offset(bx1, yy + rowH - lineW), lineW * 1.4f)
-                    d.drawLine(lo, Offset(bx1, yy), Offset(bx1, yy + rowH), lineW)
-                }
-                xx += blockW
-                col++
-            }
-            yy += rowH
-            row++
+        when (world.base) {
+            TowerStyle.BUILDING -> building(d, l, r, t, bottom, world, x0)
+            TowerStyle.CLIFF, TowerStyle.MOUNTAIN, TowerStyle.MESA -> rockPillar(d, x0, x1, top, groundY, spread, world, ol)
+            else -> stoneTower(d, l, r, t, bottom, world, ol)
         }
-        // Depth shading: darker towards the bottom and on the right side
-        d.drawRect(Color(0x26000000), Offset(l, t + 1.4f * k), Size(r - l, h))
-        d.drawRect(Color(0x26000000), Offset(l, t + 3.2f * k), Size(r - l, h))
-        d.drawRect(Color(0x30000000), Offset(r - 0.3f * k, t), Size(0.3f * k, h - t))
-        // Top cap (grass / snow / sand) with an outline and tufts along the edge
+        // Top cap
+        when (world.base) {
+            TowerStyle.BUILDING -> {
+                // Flat roof with a ledge, an antenna and a vent box
+                d.drawRect(OUTLINE_C, Offset(l - 0.15f * k - ol, t - 0.1f * k - ol), Size(r - l + 0.3f * k + ol * 2f, 0.26f * k + ol * 2f))
+                d.drawRect(rgb(world.rockTop), Offset(l - 0.15f * k, t - 0.1f * k), Size(r - l + 0.3f * k, 0.26f * k))
+                d.drawLine(Color.White.copy(alpha = 0.25f), Offset(l - 0.15f * k, t - 0.08f * k), Offset(r + 0.15f * k, t - 0.08f * k), max(1f, 0.03f * k))
+                val outer = if (x0 < 0f) l + 0.35f * k else r - 0.35f * k
+                d.drawLine(OUTLINE_C, Offset(outer, t - 0.1f * k), Offset(outer, t - 1.6f * k), max(2f, 0.06f * k))
+                d.drawLine(Color(0xFF94A3B8), Offset(outer, t - 0.1f * k), Offset(outer, t - 1.6f * k), max(1f, 0.03f * k))
+                val blink = if (sin(clock * 3f) > 0.3f) 1f else 0.25f
+                d.drawCircle(Color(0xFFEF4444).copy(alpha = blink), max(2.5f, 0.07f * k), Offset(outer, t - 1.62f * k))
+                val vx = if (x0 < 0f) l + 0.8f * k else r - 1.5f * k
+                d.drawRect(OUTLINE_C, Offset(vx - 2f, t - 0.6f * k - 2f), Size(0.7f * k + 4f, 0.52f * k + 4f))
+                d.drawRect(Color(0xFF64748B), Offset(vx, t - 0.6f * k), Size(0.7f * k, 0.52f * k))
+                d.drawLine(Color(0xFF475569), Offset(vx + 0.1f * k, t - 0.35f * k), Offset(vx + 0.6f * k, t - 0.35f * k), max(1f, 0.04f * k))
+            }
+            TowerStyle.CASTLE -> {
+                val stone = Palette.lighter(rgb(world.rock), 0.12f)
+                d.drawRect(OUTLINE_C, Offset(l - 0.2f * k - ol, t - 0.12f * k - ol), Size(r - l + 0.4f * k + ol * 2f, 0.3f * k + ol * 2f))
+                d.drawRect(stone, Offset(l - 0.2f * k, t - 0.12f * k), Size(r - l + 0.4f * k, 0.3f * k))
+                // Merlons at both ends
+                for (e in 0..1) {
+                    val mx = if (e == 0) l - 0.2f * k else r - 0.35f * k
+                    d.drawRect(OUTLINE_C, Offset(mx - ol, t - 0.62f * k - ol), Size(0.55f * k + ol * 2f, 0.5f * k + ol))
+                    d.drawRect(stone, Offset(mx, t - 0.62f * k), Size(0.55f * k, 0.5f * k))
+                }
+            }
+            else -> grassCap(d, l, r, t, world, ol)
+        }
+    }
+
+    private fun grassCap(d: DrawScope, l: Float, r: Float, t: Float, world: World, ol: Float) {
         val cap = rgb(world.rockTop)
         val capH = 0.22f * k
         val cr = androidx.compose.ui.geometry.CornerRadius(capH * 0.5f)
@@ -817,7 +835,6 @@ class ArcheryPainter {
         d.drawRoundRect(cap, Offset(l - 0.1f * k, t - 0.06f * k), Size(r - l + 0.2f * k, capH), cr)
         d.drawRoundRect(Palette.darker(cap, 0.25f), Offset(l - 0.1f * k, t + 0.08f * k), Size(r - l + 0.2f * k, capH * 0.36f), cr)
         d.drawLine(Palette.lighter(cap, 0.35f), Offset(l - 0.02f * k, t - 0.03f * k), Offset(r + 0.02f * k, t - 0.03f * k), max(1f, 0.03f * k), StrokeCap.Round)
-        // Tufts
         path.reset()
         val step = 0.16f * k
         var i = 0
@@ -832,9 +849,352 @@ class ArcheryPainter {
         }
         path.close()
         d.drawPath(path, Palette.darker(cap, 0.08f))
-        // Drips of the cap down the sides
         d.drawRoundRect(cap, Offset(l - 0.1f * k, t + 0.05f * k), Size(0.12f * k, 0.28f * k), cr)
         d.drawRoundRect(cap, Offset(r - 0.02f * k, t + 0.05f * k), Size(0.12f * k, 0.2f * k), cr)
+    }
+
+    /** Stone blocks tower (sakura) or castle keep (arrow slits and a banner). */
+    private fun stoneTower(d: DrawScope, l: Float, r: Float, t: Float, bottom: Float, world: World, ol: Float) {
+        val rock = rgb(world.rock)
+        d.drawRect(OUTLINE_C, Offset(l - ol, t), Size(r - l + ol * 2f, bottom - t))
+        d.drawRect(rock, Offset(l, t), Size(r - l, bottom - t))
+        val rowH = 0.55f * k
+        val blockW = 1.3f * k
+        val lineW = max(1f, 0.035f * k)
+        var yy = t + 0.2f * k
+        var row = 0
+        val hi = Color.White.copy(alpha = 0.13f)
+        val lo = Color(0x38000000)
+        while (yy < bottom && yy < d.size.height) {
+            val shift = if (row % 2 == 0) 0.25f * k else 0.9f * k
+            var xx = l - shift
+            var col = 0
+            while (xx < r) {
+                val bx0 = max(l, xx + lineW)
+                val bx1 = min(r, xx + blockW - lineW)
+                if (bx1 > bx0) {
+                    val v = (((row * 31 + col * 17) % 7) - 3) * 0.012f
+                    if (v != 0f) d.drawRect(if (v > 0f) Color.White.copy(alpha = v) else Color.Black.copy(alpha = -v), Offset(bx0, yy), Size(bx1 - bx0, rowH - lineW))
+                    d.drawLine(hi, Offset(bx0, yy + lineW), Offset(bx1, yy + lineW), lineW)
+                    d.drawLine(lo, Offset(bx0, yy + rowH - lineW), Offset(bx1, yy + rowH - lineW), lineW * 1.4f)
+                    d.drawLine(lo, Offset(bx1, yy), Offset(bx1, yy + rowH), lineW)
+                }
+                xx += blockW
+                col++
+            }
+            yy += rowH
+            row++
+        }
+        if (world.base == TowerStyle.CASTLE) {
+            // Arrow slits and a hanging banner
+            val cx = (l + r) / 2f
+            for (j in 0..2) {
+                val sy0 = t + (1.6f + j * 2.6f) * k
+                if (sy0 > bottom - 1f * k) break
+                d.drawRoundRect(Color(0xFF1C1917), Offset(cx - 0.08f * k, sy0), Size(0.16f * k, 0.7f * k), androidx.compose.ui.geometry.CornerRadius(0.08f * k))
+            }
+            val bx = l + (r - l) * 0.2f
+            val bw = 0.55f * k
+            path.reset()
+            path.moveTo(bx, t + 0.3f * k)
+            path.lineTo(bx + bw, t + 0.3f * k)
+            path.lineTo(bx + bw, t + 2.4f * k)
+            path.lineTo(bx + bw / 2f, t + 2.0f * k)
+            path.lineTo(bx, t + 2.4f * k)
+            path.close()
+            d.drawPath(path, OUTLINE_C, style = thinStroke)
+            d.drawPath(path, Color(0xFFB91C1C))
+            d.drawCircle(Color(0xFFFACC15), 0.12f * k, Offset(bx + bw / 2f, t + 1.0f * k))
+        }
+        d.drawRect(Color(0x26000000), Offset(l, t + 1.4f * k), Size(r - l, max(0f, bottom - t - 1.4f * k)))
+        d.drawRect(Color(0x26000000), Offset(l, t + 3.2f * k), Size(r - l, max(0f, bottom - t - 3.2f * k)))
+        d.drawRect(Color(0x30000000), Offset(r - 0.3f * k, t), Size(0.3f * k, bottom - t))
+    }
+
+    /** City building: facade with rows of windows (some lit), a neon sign on one of them. */
+    private fun building(d: DrawScope, l: Float, r: Float, t: Float, bottom: Float, world: World, x0: Float) {
+        val ol = max(2f, OUTLINE * k * 1.6f)
+        val facade = rgb(world.rock)
+        d.drawRect(OUTLINE_C, Offset(l - ol, t), Size(r - l + ol * 2f, bottom - t))
+        d.drawRect(facade, Offset(l, t), Size(r - l, bottom - t))
+        d.drawRect(Color.White.copy(alpha = 0.06f), Offset(l, t), Size(0.3f * k, bottom - t))
+        val cols = ((r - l) / (0.95f * k)).toInt().coerceAtLeast(1)
+        val gap = (r - l) / cols
+        var row = 0
+        var yy = t + 0.7f * k
+        val seed = if (x0 < 0f) 3 else 11
+        while (yy < bottom - 0.8f * k && yy < d.size.height) {
+            for (c in 0 until cols) {
+                val hsh = ((row * 73 + c * 151 + seed * 37) * 2654435761L ushr 7).toInt() and 0xff
+                val lit = hsh % 3 != 0
+                val wx = l + c * gap + gap * 0.22f
+                d.drawRect(if (lit) Color(0xFFFDE68A) else Color(0xFF1E293B), Offset(wx, yy), Size(gap * 0.56f, 0.62f * k))
+                if (lit) d.drawRect(Color(0xFFFFF7D6).copy(alpha = 0.5f), Offset(wx, yy), Size(gap * 0.56f, 0.12f * k))
+            }
+            yy += 1.15f * k
+            row++
+        }
+        // Floor lines and a neon sign
+        d.drawRect(Color(0x30000000), Offset(r - 0.35f * k, t), Size(0.35f * k, bottom - t))
+        if (x0 >= 0f) {
+            val sx0 = l + (r - l) * 0.15f
+            val sy0 = t + 1.5f * k
+            d.drawRoundRect(Color(0xFFF0ABFC).copy(alpha = 0.3f), Offset(sx0 - 0.1f * k, sy0 - 0.1f * k), Size(1.5f * k, 0.75f * k), androidx.compose.ui.geometry.CornerRadius(0.2f * k))
+            d.drawRoundRect(Color(0xFFE879F9), Offset(sx0, sy0), Size(1.3f * k, 0.55f * k), androidx.compose.ui.geometry.CornerRadius(0.15f * k), style = gaugeStroke)
+        }
+    }
+
+    /** Cliff / mesa / mountain: a rock mass widening towards the ground, with jagged sides. */
+    private fun rockPillar(d: DrawScope, x0: Float, x1: Float, top: Float, groundY: Float, spread: Float, world: World, ol: Float) {
+        val rock = rgb(world.rock)
+        val steps = ((top - groundY) / 1.1f).toInt().coerceIn(4, 40)
+        val jag = when (world.base) { TowerStyle.MOUNTAIN -> 0.45f; TowerStyle.CLIFF -> 0.3f; else -> 0.12f }
+        val seed = if (x0 < 0f) 5 else 17
+        path.reset()
+        path.moveTo(sx(x0), sy(top))
+        // Left side going down
+        for (i in 1..steps) {
+            val u = i / steps.toFloat()
+            val n = (((i * 92821 + seed * 68917) % 1000) / 1000f - 0.5f) * jag * (if (i == steps) 0f else 1f)
+            path.lineTo(sx(x0 - spread * u + n), sy(top - (top - groundY) * u))
+        }
+        path.lineTo(sx(x0 - spread), sy(groundY) + 4f)
+        path.lineTo(sx(x1 + spread), sy(groundY) + 4f)
+        for (i in steps downTo 1) {
+            val u = i / steps.toFloat()
+            val n = (((i * 68917 + seed * 92821) % 1000) / 1000f - 0.5f) * jag * (if (i == steps) 0f else 1f)
+            path.lineTo(sx(x1 + spread * u + n), sy(top - (top - groundY) * u))
+        }
+        path.lineTo(sx(x1), sy(top))
+        path.close()
+        d.drawPath(path, OUTLINE_C, style = outlineStroke)
+        d.drawPath(path, rock)
+        // Shaded right half
+        path2.reset()
+        val mid = (x0 + x1) / 2f
+        path2.moveTo(sx(mid + 0.6f), sy(top))
+        path2.lineTo(sx(x1), sy(top))
+        path2.lineTo(sx(x1 + spread), sy(groundY))
+        path2.lineTo(sx(mid + spread * 0.35f), sy(groundY))
+        path2.close()
+        d.drawPath(path2, Color(0x2E000000))
+        // Rock strata / cracks
+        val strata = if (world.base == TowerStyle.MESA) 0.9f else 1.7f
+        var y = top - 0.8f
+        var j = 0
+        while (y > groundY + 0.3f) {
+            val u = (top - y) / (top - groundY)
+            val lx = x0 - spread * u + 0.15f
+            val rx = x1 + spread * u - 0.15f
+            if (world.base == TowerStyle.MESA) {
+                d.drawLine(Color(0x33000000), Offset(sx(lx), sy(y)), Offset(sx(rx), sy(y)), max(1.5f, 0.06f * k))
+                d.drawLine(Color.White.copy(alpha = 0.12f), Offset(sx(lx), sy(y) + max(1.5f, 0.06f * k)), Offset(sx(rx), sy(y) + max(1.5f, 0.06f * k)), max(1f, 0.03f * k))
+            } else {
+                val cx = lx + (rx - lx) * (((j * 37 + 11) % 10) / 10f)
+                d.drawLine(Color(0x33000000), Offset(sx(cx), sy(y)), Offset(sx(cx + 0.5f), sy(y - 0.6f)), max(1.5f, 0.05f * k), StrokeCap.Round)
+                d.drawLine(Color(0x33000000), Offset(sx(cx + 0.5f), sy(y - 0.6f)), Offset(sx(cx + 0.2f), sy(y - 1.1f)), max(1.5f, 0.05f * k), StrokeCap.Round)
+            }
+            y -= strata
+            j++
+        }
+        // Snow on the upper slopes / moss on cliffs
+        if (world.ground == GroundStyle.SNOW || world.base == TowerStyle.CLIFF) {
+            val c = if (world.ground == GroundStyle.SNOW) Color(0xF2F8FAFC) else rgb(world.rockTop, 0.85f)
+            val depth = if (world.ground == GroundStyle.SNOW) 1.6f else 0.6f
+            path2.reset()
+            path2.moveTo(sx(x0 - 0.05f), sy(top))
+            path2.lineTo(sx(x1 + 0.05f), sy(top))
+            for (i in 0..6) {
+                val u = 1f - i / 6f
+                val xx = x1 + spread * (depth / (top - groundY)) - (x1 - x0 + 2f * spread * (depth / (top - groundY))) * (1f - u)
+                val yy = top - depth * (0.4f + 0.6f * (((i * 7) % 3) / 2f))
+                path2.lineTo(sx(xx), sy(yy))
+            }
+            path2.close()
+            d.drawPath(path2, c)
+        }
+    }
+
+    // ------------------------------------------------------------------ ground far below
+
+    /** The ground under the towers, across the whole screen. Drawn before the towers. */
+    private fun drawGround(d: DrawScope, groundY: Float, world: World, clock: Float) {
+        val w = d.size.width
+        val h = d.size.height
+        val gy = sy(groundY)
+        if (gy > h + 2f) return
+        val x0w = camX - (w / 2f) / k
+        val x1w = camX + (w / 2f) / k
+        when (world.ground) {
+            GroundStyle.SEA -> {
+                d.drawRect(Color(0xFF0E7490), Offset(0f, gy), Size(w, h - gy + 2f))
+                d.drawRect(Color(0xFF0369A1).copy(alpha = 0.6f), Offset(0f, gy + 1.5f * k), Size(w, h))
+                d.drawRect(Color(0xFF38BDF8).copy(alpha = 0.55f), Offset(0f, gy), Size(w, 0.45f * k))
+                // A sailboat passing far out
+                val bxw = groundY.let { -40f + ((clock * 0.9f) % 120f) }
+                if (bxw in x0w - 4f..x1w + 4f) boat(d, sx(bxw), gy + 0.05f * k, clock)
+                // Glints
+                var xx = floor(x0w / 2.3f) * 2.3f
+                var i = 0
+                while (xx < x1w + 2f) {
+                    val ph = sin(clock * 2f + xx * 1.3f)
+                    if (ph > 0f) d.drawLine(Color.White.copy(alpha = 0.35f * ph), Offset(sx(xx), gy + (0.7f + (i % 3) * 0.6f) * k), Offset(sx(xx + 0.6f), gy + (0.7f + (i % 3) * 0.6f) * k), max(1.5f, 0.05f * k), StrokeCap.Round)
+                    xx += 2.3f
+                    i++
+                }
+            }
+            GroundStyle.LAVA -> {
+                d.drawRect(Color(0xFF7C2D12), Offset(0f, gy), Size(w, h - gy + 2f))
+                d.drawRect(Color(0xFFEA580C), Offset(0f, gy), Size(w, 0.9f * k))
+                d.drawRect(Color(0xFFFACC15).copy(alpha = 0.55f), Offset(0f, gy), Size(w, 0.25f * k))
+                // Heat glow above the surface
+                d.drawRect(Color(0xFFF97316).copy(alpha = 0.12f), Offset(0f, gy - 2.5f * k), Size(w, 2.5f * k))
+                // Bubbles
+                var xx = floor(x0w / 1.7f) * 1.7f
+                while (xx < x1w + 2f) {
+                    val ph = ((clock * 0.7f + xx * 0.37f) % 1f + 1f) % 1f
+                    val r = 0.05f + ph * 0.18f
+                    d.drawCircle(Color(0xFFFDE047).copy(alpha = 0.8f * (1f - ph)), r * k, Offset(sx(xx + 0.3f), gy + 0.2f * k), style = thinStroke)
+                    xx += 1.7f
+                }
+            }
+            GroundStyle.STREET -> street(d, gy, x0w, x1w, clock)
+            else -> {
+                val base = when (world.ground) {
+                    GroundStyle.SAND -> Color(0xFFE9C46A)
+                    GroundStyle.SNOW -> Color(0xFFE2E8F0)
+                    else -> Color(0xFF4D7C0F)
+                }
+                d.drawRect(base, Offset(0f, gy), Size(w, h - gy + 2f))
+                d.drawRect(Palette.lighter(base, 0.2f), Offset(0f, gy), Size(w, 0.3f * k))
+                d.drawRect(Palette.darker(base, 0.15f), Offset(0f, gy + 1.8f * k), Size(w, h))
+                // Little details along the ground: cacti, pines or bushes
+                var xx = floor(x0w / 4.5f) * 4.5f
+                while (xx < x1w + 4f) {
+                    val v = ((xx * 13.7f).toInt() % 3 + 3) % 3
+                    val px = sx(xx + v * 0.7f)
+                    when (world.ground) {
+                        GroundStyle.SAND -> if (v != 1) {
+                            d.drawLine(Color(0xFF15803D), Offset(px, gy), Offset(px, gy - 1.2f * k), 0.22f * k, StrokeCap.Round)
+                            d.drawLine(Color(0xFF15803D), Offset(px - 0.3f * k, gy - 0.5f * k), Offset(px - 0.3f * k, gy - 0.85f * k), 0.14f * k, StrokeCap.Round)
+                            d.drawLine(Color(0xFF15803D), Offset(px - 0.3f * k, gy - 0.5f * k), Offset(px, gy - 0.5f * k), 0.14f * k, StrokeCap.Round)
+                        }
+                        GroundStyle.SNOW -> {
+                            path2.reset()
+                            path2.moveTo(px - 0.5f * k, gy)
+                            path2.lineTo(px, gy - (1.4f + v * 0.3f) * k)
+                            path2.lineTo(px + 0.5f * k, gy)
+                            path2.close()
+                            d.drawPath(path2, Color(0xFF166534))
+                            d.drawCircle(Color.White.copy(alpha = 0.8f), 0.15f * k, Offset(px, gy - (1.3f + v * 0.3f) * k))
+                        }
+                        else -> {
+                            d.drawCircle(Color(0xFF3F6212), 0.45f * k, Offset(px, gy - 0.1f * k))
+                            d.drawCircle(Color(0xFF65A30D), 0.35f * k, Offset(px + 0.35f * k, gy - 0.05f * k))
+                        }
+                    }
+                    xx += 4.5f
+                }
+            }
+        }
+        // A soft shadow where each tower meets the ground
+    }
+
+    /** Water/lava in front of whatever fell in (drawn after the bodies). */
+    private fun liquidFront(d: DrawScope, groundY: Float, world: World, clock: Float) {
+        if (!GroundStyle.liquid(world.ground)) return
+        val w = d.size.width
+        val h = d.size.height
+        val gy = sy(groundY)
+        if (gy > h + 2f) return
+        val lava = world.ground == GroundStyle.LAVA
+        val c = if (lava) Color(0xFFEA580C) else Color(0xFF0E7490)
+        d.drawRect(c.copy(alpha = 0.72f), Offset(0f, gy + 0.18f * k), Size(w, h - gy))
+        // Wave crest
+        path2.reset()
+        val step = w / 24f
+        path2.moveTo(0f, gy + 0.3f * k)
+        var x = 0f
+        while (x <= w + step) {
+            val wx = (x - (w / 2f)) / k + camX
+            path2.lineTo(x, gy + (0.1f + 0.1f * sin(wx * 1.6f + clock * 2.4f)) * k)
+            x += step
+        }
+        path2.lineTo(w, gy + 0.35f * k)
+        path2.close()
+        d.drawPath(path2, if (lava) Color(0xFFFDE047).copy(alpha = 0.8f) else Color(0xFFBAE6FD).copy(alpha = 0.85f))
+    }
+
+    private fun boat(d: DrawScope, x: Float, y: Float, clock: Float) {
+        val s = 0.9f * k
+        val bob = sin(clock * 1.5f) * 0.05f * k
+        path2.reset()
+        path2.moveTo(x - s, y - 0.25f * s + bob)
+        path2.lineTo(x + s, y - 0.25f * s + bob)
+        path2.lineTo(x + s * 0.7f, y + 0.15f * s + bob)
+        path2.lineTo(x - s * 0.7f, y + 0.15f * s + bob)
+        path2.close()
+        d.drawPath(path2, Color(0xFF7C2D12))
+        d.drawLine(Color(0xFF451A03), Offset(x, y - 0.25f * s + bob), Offset(x, y - 1.6f * s + bob), max(1.5f, 0.05f * k))
+        path2.reset()
+        path2.moveTo(x + 0.05f * s, y - 1.55f * s + bob)
+        path2.lineTo(x + 0.85f * s, y - 0.4f * s + bob)
+        path2.lineTo(x + 0.05f * s, y - 0.4f * s + bob)
+        path2.close()
+        d.drawPath(path2, Color(0xFFF8FAFC))
+    }
+
+    /** Street far below: sidewalk, two lanes with cars driving both ways, lamp posts. */
+    private fun street(d: DrawScope, gy: Float, x0w: Float, x1w: Float, clock: Float) {
+        val w = d.size.width
+        val h = d.size.height
+        d.drawRect(Color(0xFF94A3B8), Offset(0f, gy), Size(w, 0.3f * k))
+        d.drawRect(Color(0xFF64748B), Offset(0f, gy + 0.3f * k), Size(w, 0.1f * k))
+        d.drawRect(Color(0xFF1F2937), Offset(0f, gy + 0.4f * k), Size(w, 3f * k))
+        d.drawRect(Color(0xFF111827), Offset(0f, gy + 3.4f * k), Size(w, h))
+        // Lane dashes
+        var xx = floor(x0w / 2f) * 2f
+        while (xx < x1w + 2f) {
+            d.drawLine(Color(0xFFFDE68A), Offset(sx(xx), gy + 1.9f * k), Offset(sx(xx + 1f), gy + 1.9f * k), max(1.5f, 0.08f * k))
+            xx += 2f
+        }
+        // Lamp posts with a pool of light
+        xx = floor(x0w / 9f) * 9f
+        while (xx < x1w + 9f) {
+            val px = sx(xx)
+            d.drawCircle(Color(0xFFFDE68A).copy(alpha = 0.12f), 1.3f * k, Offset(px, gy - 2.3f * k))
+            d.drawLine(Color(0xFF334155), Offset(px, gy), Offset(px, gy - 2.6f * k), max(2f, 0.08f * k))
+            d.drawLine(Color(0xFF334155), Offset(px, gy - 2.6f * k), Offset(px + 0.5f * k, gy - 2.6f * k), max(2f, 0.08f * k))
+            d.drawCircle(Color(0xFFFEF9C3), 0.12f * k, Offset(px + 0.5f * k, gy - 2.5f * k))
+            xx += 9f
+        }
+        // Cars: far lane to the right, near lane to the left
+        val span = 70f
+        for (c in 0 until 5) {
+            val right = c % 2 == 0
+            val speed = if (right) 4.5f + c * 0.4f else -(5f + c * 0.3f)
+            val base = camX - span / 2f
+            val cxw = base + (((c * 17f + clock * speed) % span) + span) % span
+            if (cxw < x0w - 3f || cxw > x1w + 3f) continue
+            val lane = if (right) 1.35f else 2.8f
+            car(d, sx(cxw), gy + lane * k, if (right) 1f else -1f, CAR_COLORS[c % CAR_COLORS.size])
+        }
+    }
+
+    private fun car(d: DrawScope, x: Float, y: Float, dir: Float, c: Color) {
+        val s = k
+        val cr = androidx.compose.ui.geometry.CornerRadius(0.15f * s)
+        d.drawRoundRect(OUTLINE_C, Offset(x - 1.05f * s, y - 0.55f * s), Size(2.1f * s, 0.55f * s), cr)
+        d.drawRoundRect(c, Offset(x - 1f * s, y - 0.5f * s), Size(2f * s, 0.45f * s), cr)
+        d.drawRoundRect(Palette.darker(c, 0.15f), Offset(x - 0.55f * s, y - 0.9f * s), Size(1.1f * s, 0.45f * s), cr)
+        d.drawRect(Color(0xFF93C5FD), Offset(x - 0.45f * s, y - 0.82f * s), Size(0.4f * s, 0.3f * s))
+        d.drawRect(Color(0xFF93C5FD), Offset(x + 0.05f * s, y - 0.82f * s), Size(0.4f * s, 0.3f * s))
+        d.drawCircle(Color(0xFF111827), 0.2f * s, Offset(x - 0.6f * s, y - 0.05f * s))
+        d.drawCircle(Color(0xFF111827), 0.2f * s, Offset(x + 0.6f * s, y - 0.05f * s))
+        // Head- and tail-lights
+        d.drawCircle(Color(0xFFFEF9C3), 0.08f * s, Offset(x + dir * 0.98f * s, y - 0.35f * s))
+        d.drawCircle(Color(0xFFFEF9C3).copy(alpha = 0.25f), 0.35f * s, Offset(x + dir * 1.2f * s, y - 0.35f * s))
+        d.drawCircle(Color(0xFFEF4444), 0.07f * s, Offset(x - dir * 0.98f * s, y - 0.35f * s))
     }
 
     // ------------------------------------------------------------------ archers
@@ -1413,6 +1773,7 @@ class ArcheryPainter {
         const val FIRE_TRAIL = 100
         val OUTLINE_C = Color(0xFF1A1226)
         val HAIR_C = Color(0xFF3B2416)
+        val CAR_COLORS = arrayOf(Color(0xFFEF4444), Color(0xFF3B82F6), Color(0xFFFACC15), Color(0xFF10B981), Color(0xFFF8FAFC))
         val BALLOONS = arrayOf(Color(0xFFF43F5E), Color(0xFFFACC15), Color(0xFF38BDF8), Color(0xFFA78BFA), Color(0xFF34D399), Color(0xFFFB923C), Color(0xFFF472B6), Color(0xFFE11D48), Color(0xFF22D3EE), Color(0xFF84CC16))
         val QUIVER_FLETCH = arrayOf(Color(0xFFF8FAFC), Color(0xFFEF4444), Color(0xFFFACC15))
         const val TRAIL = 22
