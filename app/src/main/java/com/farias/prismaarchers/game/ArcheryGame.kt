@@ -212,6 +212,11 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         var ty: Float
         var tw = VIEW_W
         when {
+            clock < introUntil -> {
+                tx = d.enemy.rootX - VIEW_W * 0.2f
+                ty = d.enemy.rootY + 1.6f
+                tw = VIEW_W * 1.15f
+            }
             overview && d.turn != Duel.Turn.OVER -> {
                 // Both archers in view (the arrow too, it's always between them or near).
                 val x0 = min(d.player.rootX, d.enemy.rootX)
@@ -220,11 +225,6 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
                 ty = (d.player.rootY + d.enemy.rootY) / 2f + 1.4f
                 tw = (x1 - x0) + 7f
                 if (a != null && (a.x < x0 - 3f || a.x > x1 + 3f)) tx = a.x.coerceIn(x0 - 6f, x1 + 6f)
-            }
-            clock < introUntil -> {
-                tx = d.enemy.rootX - VIEW_W * 0.2f
-                ty = d.enemy.rootY + 1.6f
-                tw = VIEW_W * 1.15f
             }
             a != null -> {
                 // Follow the arrow, a bit ahead of it.

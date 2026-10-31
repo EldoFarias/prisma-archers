@@ -78,8 +78,8 @@ class GameHost(context: Context) {
     var headsThisDuel by mutableIntStateOf(0)
         private set
     private var failsKey = -1
-    /** Camera pulled back to show both archers. */
-    var overview by mutableStateOf(false)
+    /** Camera pulled back to show both archers (the default view; the button zooms in). */
+    var overview by mutableStateOf(true)
         private set
     /** Changes at every new duel (drives the opening banner). */
     var duelId by mutableIntStateOf(0)
@@ -218,7 +218,7 @@ class GameHost(context: Context) {
         applyLooks()
         Progress.useTrialGame()
         game.startPlay(spec)
-        overview = false
+        game.overview = overview
         duelId++
         setOpponent(spec, worldLevel)
         MusicPlayer.select(MusicPlayer.trackFor(worldLevel, spec.boss || endless))
