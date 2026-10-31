@@ -36,6 +36,9 @@ import com.farias.prismaarchers.data.TowerStyle
 import com.farias.prismaarchers.data.Trails
 import com.farias.prismaarchers.data.World
 import com.farias.prismaarchers.game.Arrow
+import com.farias.prismaarchers.game.Obstacle
+import com.farias.prismaarchers.game.ObstacleKind
+import com.farias.prismaarchers.game.Platform
 import com.farias.prismaarchers.game.ArrowKind
 import com.farias.prismaarchers.game.Debris
 import com.farias.prismaarchers.game.Prop
@@ -116,6 +119,7 @@ class ArcheryPainter {
     private var skyBrush: Brush = Brush.verticalGradient(listOf(Color.Black, Color.Black))
     private var sunBrush: Brush = skyBrush
     private var vignette: Brush = skyBrush
+    private var hurtVignette: Brush = skyBrush
     private var farColor = Color.Gray
     private var nearColor = Color.DarkGray
     private var sunPos = Offset.Zero
@@ -190,7 +194,8 @@ class ArcheryPainter {
         val g = host.game
         val duel = g.duel
         val world = host.world
-        val kk = w / g.viewW
+        // Zoom punch on impacts
+        val kk = w / (g.viewW * (1f - 0.06f * g.punch))
         val sh = g.shake * kk * 0.12f
         setTransform(g.camX, g.camY, kk, w / 2f + sin(g.clock * 53f) * sh, h * 0.56f + cos(g.clock * 47f) * sh)
         if (world !== sceneWorld || w != sceneW || h != sceneH) buildScene(world, w, h)
@@ -205,13 +210,23 @@ class ArcheryPainter {
         // Platforms with their flags (and torches at night)
         val torches = world.scenery == 3 || world.base == TowerStyle.CASTLE
         drawGround(d, duel.groundY, world, g.clock)
-        for (i in 0..1) {
+        if (GroundStyle.liquid(world.ground) && world.ground == GroundStyle.SEA) fish(d, duel.groundY, g.clock)
+        val towers = duel.platforms.size - 1
+        for (i in 0 until towers) {
             val p = duel.platforms[i]
-            drawPlatform(d, p.x0, p.x1, p.top, duel.groundY, world, g.clock)
-            val fx = if (i == 0) p.x0 + 0.55f else p.x1 - 0.55f
-            flag(d, fx, p.top, duel.spec.wind, g.clock, if (i == 0) Color(0xFF34D399) else Color(0xFFF43F5E))
-            if (torches) torch(d, if (i == 0) p.x1 - 0.25f else p.x0 + 0.25f, p.top, g.clock + i * 1.7f)
+            when {
+                p.boat -> boatDeck(d, p, duel.groundY, g.clock)
+                p.lift > 0f -> elevator(d, p, duel.groundY, world)
+                else -> drawPlatform(d, p.x0, p.x1, p.top, duel.groundY, world, g.clock)
+            }
+            if (i <= 1 && !p.boat) {
+                val fx = if (i == 0) p.x0 + 0.55f else p.x1 - 0.55f
+                flag(d, fx, p.top, duel.spec.wind, g.clock, if (i == 0) Color(0xFF34D399) else Color(0xFFF43F5E))
+            }
+            if (torches && !p.boat) torch(d, if (i == 0) p.x1 - 0.25f else p.x0 + 0.25f, p.top, g.clock + i * 1.7f)
         }
+        // Obstacles (shields, walls, signs, barrels, crates, targets)
+        for (o in duel.obstacles) if (o.alive) drawObstacle(d, o, duel, world, g.clock)
         // Arrows in the ground / bodies
         for (a in duel.arrows) {
             if (a.flying) continue
@@ -232,9 +247,13 @@ class ArcheryPainter {
             drawArrow(d, axw, ayw, ang, a.byPlayer, if (a.byPlayer) host.playerBow else host.enemyBow, 1f, a.kind, g.clock)
         }
         // Archers
-        drawArcher(d, duel.enemy, host.enemyOutfit, host.enemyBow, duel.helmetOn, duel.turn == Duel.Turn.ENEMY && duel.enemy.alive, g.clock)
-        if (duel.enemyFrozen) iceBlock(d, duel.enemy, g.clock)
-        if (duel.bossShield > 0 && duel.enemy.alive) shieldBubble(d, duel.enemy, duel.bossShield, g.clock)
+        for (f in duel.foes) {
+            val o = host.foeOutfits.getOrNull(f.index) ?: host.enemyOutfit
+            val b = host.foeBows.getOrNull(f.index) ?: host.enemyBow
+            drawArcher(d, f.body, o, b, f.helmetOn, duel.turn == Duel.Turn.ENEMY && duel.activeFoe == f.index && f.body.alive, g.clock)
+            if (f.frozen) iceBlock(d, f.body, g.clock)
+            if (f.shield > 0 && f.alive) shieldBubble(d, f.body, f.shield, g.clock)
+        }
         drawArcher(d, duel.player, host.playerOutfit, host.playerBow, false, duel.turn == Duel.Turn.PLAYER && duel.player.alive, g.clock, host.selectedArrow)
         // Arrows in the air (+ trail of the lead one)
         val fl = duel.flying
@@ -252,8 +271,9 @@ class ArcheryPainter {
         if (g.helmet.active) helmetDebris(d, g.helmet)
         // Whatever fell into the water/lava is under its surface
         liquidFront(d, duel.groundY, world, g.clock, g, duel)
-        // Aim guide
-        if (g.aiming && g.aimPower > 0.04f && duel.turn == Duel.Turn.PLAYER) {
+        // Aim guide (the player's, or the second player's in the 2-player mode)
+        val enemyAims = duel.versus && duel.turn == Duel.Turn.ENEMY
+        if (g.aiming && g.aimPower > 0.04f && (duel.turn == Duel.Turn.PLAYER || enemyAims)) {
             val n = g.guide(guide)
             val dotK = max(k, w / 22f)
             for (i in 0 until n) {
@@ -263,7 +283,7 @@ class ArcheryPainter {
                 d.drawCircle(OUTLINE_C.copy(alpha = 0.45f * f), rr + 2f, o)
                 d.drawCircle(Color.White.copy(alpha = 0.9f * f), rr, o)
             }
-            val pl = duel.player
+            val pl = if (enemyAims) duel.enemy else duel.player
             // Power gauge: an arc around the archer filling green → yellow → red
             val gc = Offset(sx(pl.x[Ragdoll.CHEST]), sy(pl.y[Ragdoll.CHEST]))
             val gr = max(1.15f * k, w * 0.12f)
@@ -294,20 +314,24 @@ class ArcheryPainter {
         if (ghostDuel !== duel) {
             ghostDuel = duel
             ghostP = duel.playerHp.toFloat()
-            ghostE = duel.enemyHp.toFloat()
+            for (f in duel.foes) if (f.index < ghostE.size) ghostE[f.index] = f.hp.toFloat()
         }
         ghostP = drain(ghostP, duel.playerHp.toFloat(), dtc)
-        ghostE = drain(ghostE, duel.enemyHp.toFloat(), dtc)
-        hpBar(d, duel.player, duel.playerHp, duel.maxPlayerHp, ghostP, Color(0xFF34D399), duel.turn == Duel.Turn.PLAYER, g.clock, host.shields)
-        val ey = hpBar(d, duel.enemy, duel.enemyHp, duel.maxEnemyHp, ghostE, Color(0xFFF43F5E), false, g.clock, 0)
-        if (ey != null && host.enemyLabel.isNotEmpty() && host.phase != GameHost.Phase.MENU) {
-            val lay = layout(m, host.enemyLabel, textStyleLabel)
-            d.drawText(lay, topLeft = Offset(sx(duel.enemy.rootX) - lay.size.width / 2f, ey - lay.size.height - 3f))
+        hpBar(d, duel.player, duel.playerHp, duel.maxPlayerHp, ghostP, Color(0xFF34D399), duel.turn == Duel.Turn.PLAYER || (duel.versus && duel.turn == Duel.Turn.PLAYER), g.clock, host.shields)
+        for (f in duel.foes) {
+            if (f.index >= ghostE.size) continue
+            ghostE[f.index] = drain(ghostE[f.index], f.hp.toFloat(), dtc)
+            val ey = hpBar(d, f.body, f.hp, f.maxHp, ghostE[f.index], Color(0xFFF43F5E), duel.versus && duel.turn == Duel.Turn.ENEMY, g.clock, 0)
+            val label = host.foeLabels.getOrNull(f.index)
+            if (ey != null && !label.isNullOrEmpty() && host.phase != GameHost.Phase.MENU && f.alive) {
+                val lay = layout(m, label, textStyleLabel)
+                d.drawText(lay, topLeft = Offset(sx(f.body.rootX) - lay.size.width / 2f, ey - lay.size.height - 3f))
+            }
         }
         // Speech bubble
         val ba = g.clock - host.bubbleAt
         if (host.bubbleText.isNotEmpty() && ba in 0f..2.4f && host.phase == GameHost.Phase.PLAYING) {
-            val who = if (host.bubbleEnemy) duel.enemy else duel.player
+            val who = if (host.bubbleEnemy) (duel.foes.getOrNull(host.bubbleFoe)?.body ?: duel.enemy) else duel.player
             if (who.alive) bubble(d, m, host.bubbleText, who, ba, w)
         }
         // Floating texts
@@ -324,14 +348,17 @@ class ArcheryPainter {
             }
         }
         // Off-screen markers
-        if (duel.turn != Duel.Turn.OVER) {
-            offscreen(d, m, duel.enemy, w, h, Color(0xFFF43F5E), duel.spec.distance)
-            offscreen(d, m, duel.player, w, h, Color(0xFF34D399), duel.spec.distance)
+        if (duel.turn != Duel.Turn.OVER && host.phase != GameHost.Phase.MENU) {
+            // The enemy whose turn it is (or the nearest one standing) and the player.
+            val f = duel.focus()
+            if (f.alive) offscreen(d, m, f.body, w, h, Color(0xFFF43F5E), f.spec.x)
+            offscreen(d, m, duel.player, w, h, Color(0xFF34D399), f.spec.x)
         }
         // Slow motion vignette, flashes and the kill cam's cinema bars
         if (g.slow > 0.02f) d.drawRect(vignette, alpha = (g.slow * 0.75f).coerceAtMost(1f))
         if (g.flash > 0.02f) d.drawRect(Color.White, alpha = (g.flash * 0.45f).coerceAtMost(1f))
         if (g.blastFlash > 0.02f) d.drawRect(Color(0xFFFF8A2B), alpha = (g.blastFlash * 0.35f).coerceAtMost(1f))
+        if (g.hurtFlash > 0.02f) d.drawRect(hurtVignette, alpha = (g.hurtFlash * 0.8f).coerceAtMost(1f))
         if (g.killCam > 0.01f) {
             val bar = g.killCam * h * 0.11f
             d.drawRect(Color.Black, Offset.Zero, Size(w, bar))
@@ -342,7 +369,7 @@ class ArcheryPainter {
     // Lost-HP chunk that drains after a short pause
     private var ghostDuel: Duel? = null
     private var ghostP = 100f
-    private var ghostE = 100f
+    private val ghostE = FloatArray(8)
     private var lastClock = 0f
 
     private fun drain(ghost: Float, cur: Float, dt: Float): Float {
@@ -353,7 +380,7 @@ class ArcheryPainter {
     // ------------------------------------------------------------------ replay
 
     private var replayP: Ragdoll? = null
-    private var replayE: Ragdoll? = null
+    private val replayE = arrayOfNulls<Ragdoll>(Recorder.FOES)
 
     /** Draws frame [frame] of the recorded killing blow. */
     fun drawReplay(d: DrawScope, host: GameHost, frame: Int, clock: Float) {
@@ -369,17 +396,27 @@ class ArcheryPainter {
         drawSky(d, w, h, clock, world, host.windKmh)
         val rd = host.game.duel
         drawGround(d, rd.groundY, world, clock)
-        for (q in 0..1) drawPlatform(d, rd.platforms[q].x0, rd.platforms[q].x1, rd.platforms[q].top, rd.groundY, world, clock)
+        for (q in 0 until rd.platforms.size - 1) {
+            val p = rd.platforms[q]
+            when {
+                p.boat -> boatDeck(d, p, rd.groundY, clock)
+                p.lift > 0f -> elevator(d, p, rd.groundY, world)
+                else -> drawPlatform(d, p.x0, p.x1, p.top, rd.groundY, world, clock)
+            }
+        }
+        for (o in rd.obstacles) if (o.alive) drawObstacle(d, o, rd, world, clock)
         val rp = replayP ?: Ragdoll(0f, 0f, 1f).also { replayP = it }
-        val re = replayE ?: Ragdoll(0f, 0f, -1f).also { replayE = it }
         System.arraycopy(rec.pX, i * Ragdoll.N, rp.x, 0, Ragdoll.N)
         System.arraycopy(rec.pY, i * Ragdoll.N, rp.y, 0, Ragdoll.N)
-        System.arraycopy(rec.eX, i * Ragdoll.N, re.x, 0, Ragdoll.N)
-        System.arraycopy(rec.eY, i * Ragdoll.N, re.y, 0, Ragdoll.N)
-        rp.alive = rec.alive[i * 2]
-        re.alive = rec.alive[i * 2 + 1]
+        rp.alive = rec.alive[i * (1 + Recorder.FOES)]
         rp.rootX = 0f; rp.rootY = 0f
-        drawArcher(d, re, host.enemyOutfit, host.enemyBow, rec.helmetOn[i], false, clock)
+        for (q in 0 until rec.foeCount[i]) {
+            val re = replayE[q] ?: Ragdoll(0f, 0f, -1f).also { replayE[q] = it }
+            System.arraycopy(rec.eX, (i * Recorder.FOES + q) * Ragdoll.N, re.x, 0, Ragdoll.N)
+            System.arraycopy(rec.eY, (i * Recorder.FOES + q) * Ragdoll.N, re.y, 0, Ragdoll.N)
+            re.alive = rec.alive[i * (1 + Recorder.FOES) + 1 + q]
+            drawArcher(d, re, host.foeOutfits.getOrNull(q) ?: host.enemyOutfit, host.foeBows.getOrNull(q) ?: host.enemyBow, rec.helmet[i * Recorder.FOES + q], false, clock)
+        }
         drawArcher(d, rp, host.playerOutfit, host.playerBow, false, false, clock)
         for (j in 0 until rec.aCount[i]) {
             val q = i * Recorder.ARROWS + j
@@ -613,6 +650,10 @@ class ArcheryPainter {
         sunPos = Offset(w * 0.74f, h * 0.17f)
         sunR = w * 0.085f
         sunBrush = Brush.radialGradient(listOf(rgb(world.sun, 0.55f), rgb(world.sun, 0f)), sunPos, max(1f, sunR * 3.2f))
+        hurtVignette = Brush.radialGradient(
+            0.5f to Color.Transparent, 1f to Color(0xCCDC2626),
+            center = Offset(w / 2f, h / 2f), radius = max(1f, max(w, h) * 0.7f),
+        )
         vignette = Brush.radialGradient(
             0.45f to Color.Transparent, 1f to Color(0xAA05010F),
             center = Offset(w / 2f, h / 2f), radius = max(1f, max(w, h) * 0.75f),
@@ -1131,9 +1172,9 @@ class ArcheryPainter {
         d.drawRect((if (lava) Color(0xFF7C2D12) else Color(0xFF0C4A6E)).copy(alpha = 0.55f), Offset(0f, gy + 1.6f * k), Size(w, h - gy))
         // Foam where the towers meet the water
         if (duel != null) {
-            for (q in 0..1) {
+            for (q in 0 until duel.platforms.size - 1) {
                 val p = duel.platforms[q]
-                if (p.top - groundY < 0.15f) continue
+                if (p.top - groundY < 0.15f || p.boat || p.lift > 0f) continue
                 val spread = when (world.base) { TowerStyle.MOUNTAIN -> 0.5f; TowerStyle.CLIFF -> 0.2f; TowerStyle.MESA -> 0.08f; else -> 0f } * (p.top - groundY)
                 for (e in 0..1) {
                     val fx = if (e == 0) p.x0 - spread else p.x1 + spread
@@ -1183,6 +1224,165 @@ class ArcheryPainter {
         path2.lineTo(-step, if (fillDown) h + 2f else gy + 0.28f * k)
         path2.close()
         d.drawPath(path2, c)
+    }
+
+    /** A moving lift: a short tower, two rails and a metal deck riding up and down. */
+    private fun elevator(d: DrawScope, p: Platform, groundY: Float, world: World) {
+        val baseTop = p.baseTop - 0.35f
+        if (baseTop - groundY > 0.15f) drawPlatform(d, p.x0 + 0.15f, p.x1 - 0.15f, baseTop, groundY, world, 0f)
+        val railTop = sy(p.baseTop + p.lift + 1.9f)
+        val railBot = sy(baseTop)
+        val rw = max(2f, 0.09f * k)
+        for (e in 0..1) {
+            val x = sx(if (e == 0) p.x0 + 0.12f else p.x1 - 0.12f)
+            d.drawLine(OUTLINE_C, Offset(x, railTop), Offset(x, railBot), rw * 1.8f)
+            d.drawLine(Color(0xFF94A3B8), Offset(x, railTop), Offset(x, railBot), rw)
+        }
+        d.drawLine(OUTLINE_C, Offset(sx(p.x0 + 0.12f), railTop), Offset(sx(p.x1 - 0.12f), railTop), rw * 1.6f)
+        // Cable down to the deck
+        val mx = sx((p.x0 + p.x1) / 2f)
+        d.drawLine(Color(0xFF334155), Offset(mx, railTop), Offset(mx, sy(p.top + 0.05f)), max(1f, 0.035f * k))
+        val t = sy(p.top)
+        val l = sx(p.x0); val r = sx(p.x1)
+        d.drawRect(OUTLINE_C, Offset(l - 2f, t - 2f), Size(r - l + 4f, 0.32f * k + 4f))
+        d.drawRect(Color(0xFF64748B), Offset(l, t), Size(r - l, 0.32f * k))
+        d.drawRect(Color(0xFFCBD5E1), Offset(l, t), Size(r - l, 0.07f * k))
+        // Warning stripes
+        var x = l + 0.1f * k
+        while (x < r - 0.2f * k) {
+            d.drawLine(Color(0xFFFACC15), Offset(x, t + 0.3f * k), Offset(x + 0.16f * k, t + 0.1f * k), max(1.5f, 0.06f * k))
+            x += 0.4f * k
+        }
+    }
+
+    /** A small wooden boat the archer stands on (bobbing with the waves). */
+    private fun boatDeck(d: DrawScope, p: Platform, groundY: Float, clock: Float) {
+        val l = sx(p.x0 - 0.35f); val r = sx(p.x1 + 0.35f)
+        val t = sy(p.top)
+        val b = sy(groundY - 0.35f)
+        path2.reset()
+        path2.moveTo(l, t)
+        path2.lineTo(r, t)
+        path2.lineTo(r - 0.45f * k, b)
+        path2.lineTo(l + 0.45f * k, b)
+        path2.close()
+        d.drawPath(path2, Color(0xFF7C2D12))
+        d.drawPath(path2, OUTLINE_C, style = thinStroke)
+        d.drawRect(Color(0xFFB45309), Offset(l, t), Size(r - l, 0.1f * k))
+        d.drawLine(Color(0xFF451A03), Offset(l + 0.25f * k, (t + b) / 2f), Offset(r - 0.25f * k, (t + b) / 2f), max(1f, 0.03f * k))
+        d.drawCircle(Color(0xFFF8FAFC), 0.07f * k, Offset(sx(p.x0 + 0.1f), (t + b) / 2f))
+    }
+
+    /** Shields, walls, signs, barrels, crates and target boards. */
+    private fun drawObstacle(d: DrawScope, o: Obstacle, duel: Duel, world: World, clock: Float) {
+        val l = sx(o.x0); val r = sx(o.x1)
+        val top = sy(o.y1); val bot = sy(o.y0)
+        if (r < -20f || l > d.size.width + 20f) return
+        val wob = if (clock - o.hitAt < 0.35f) sin((clock - o.hitAt) * 60f) * 0.04f * k * (1f - (clock - o.hitAt) / 0.35f) else 0f
+        val ol = max(2f, OUTLINE * k * 1.4f)
+        val w = r - l; val h = bot - top
+        when (o.kind) {
+            ObstacleKind.WOOD -> {
+                d.drawRoundRect(OUTLINE_C, Offset(l - ol + wob, top - ol), Size(w + ol * 2, h + ol * 2), androidx.compose.ui.geometry.CornerRadius(w * 0.3f))
+                d.drawRoundRect(Color(0xFF92400E), Offset(l + wob, top), Size(w, h), androidx.compose.ui.geometry.CornerRadius(w * 0.3f))
+                d.drawLine(Color(0xFF78350F), Offset(l + w / 2f + wob, top + 2f), Offset(l + w / 2f + wob, bot - 2f), max(1f, 0.03f * k))
+                d.drawRect(Color(0xFF9CA3AF), Offset(l + wob, top + h * 0.22f), Size(w, h * 0.07f))
+                d.drawRect(Color(0xFF9CA3AF), Offset(l + wob, top + h * 0.7f), Size(w, h * 0.07f))
+                // Cracks as it takes hits
+                if (o.hp <= 1) {
+                    d.drawLine(OUTLINE_C, Offset(l + w * 0.2f + wob, top + h * 0.35f), Offset(l + w * 0.75f + wob, top + h * 0.55f), max(1f, 0.025f * k))
+                    d.drawLine(OUTLINE_C, Offset(l + w * 0.5f + wob, top + h * 0.45f), Offset(l + w * 0.35f + wob, top + h * 0.85f), max(1f, 0.025f * k))
+                }
+            }
+            ObstacleKind.WALL -> {
+                val rock = Color(0xFF000000 or world.rock)
+                d.drawRect(OUTLINE_C, Offset(l - ol, top - ol), Size(w + ol * 2, h + ol))
+                d.drawRect(rock, Offset(l, top), Size(w, h))
+                val brick = 0.45f * k
+                var y = top; var row = 0
+                while (y < bot) {
+                    d.drawLine(OUTLINE_C.copy(alpha = 0.45f), Offset(l, y), Offset(r, y), max(1f, 0.02f * k))
+                    var x = l + (if (row % 2 == 0) 0f else w / 2f)
+                    while (x < r) {
+                        d.drawLine(OUTLINE_C.copy(alpha = 0.45f), Offset(x, y), Offset(x, min(bot, y + brick)), max(1f, 0.02f * k))
+                        x += w
+                    }
+                    y += brick; row++
+                }
+                d.drawRect(Color.White.copy(alpha = 0.12f), Offset(l, top), Size(w * 0.3f, h))
+            }
+            ObstacleKind.METAL -> {
+                val px = (l + r) / 2f
+                val ground = sy(duel.groundY)
+                d.drawLine(OUTLINE_C, Offset(px, bot), Offset(px, ground), max(3f, 0.12f * k))
+                d.drawLine(Color(0xFF6B7280), Offset(px, bot), Offset(px, ground), max(2f, 0.07f * k))
+                d.drawRect(OUTLINE_C, Offset(l - ol + wob, top - ol), Size(w + ol * 2, h + ol * 2))
+                d.drawRect(Color(0xFF94A3B8), Offset(l + wob, top), Size(w, h))
+                d.drawRect(Color(0xFFE2E8F0), Offset(l + wob, top), Size(w, h * 0.18f))
+                d.drawLine(Color.White.copy(alpha = 0.6f), Offset(l + w * 0.2f + wob, bot - h * 0.15f), Offset(l + w * 0.8f + wob, top + h * 0.15f), max(1f, 0.04f * k))
+                for (c in 0..3) d.drawCircle(Color(0xFF475569), 0.04f * k, Offset((if (c % 2 == 0) l + w * 0.15f else r - w * 0.15f) + wob, if (c < 2) top + h * 0.15f else bot - h * 0.15f))
+            }
+            ObstacleKind.BARREL -> {
+                d.drawRoundRect(OUTLINE_C, Offset(l - ol, top - ol), Size(w + ol * 2, h + ol * 2), androidx.compose.ui.geometry.CornerRadius(w * 0.25f))
+                d.drawRoundRect(Color(0xFFDC2626), Offset(l + wob, top), Size(w, h), androidx.compose.ui.geometry.CornerRadius(w * 0.25f))
+                d.drawRect(Color(0xFF7F1D1D), Offset(l + wob, top + h * 0.18f), Size(w, h * 0.08f))
+                d.drawRect(Color(0xFF7F1D1D), Offset(l + wob, top + h * 0.74f), Size(w, h * 0.08f))
+                d.drawRect(Color.White.copy(alpha = 0.25f), Offset(l + w * 0.12f + wob, top + h * 0.05f), Size(w * 0.14f, h * 0.9f))
+                // Hazard mark
+                val cx = (l + r) / 2f + wob; val cy = (top + bot) / 2f
+                path2.reset()
+                path2.moveTo(cx, cy - w * 0.22f); path2.lineTo(cx + w * 0.22f, cy + w * 0.17f); path2.lineTo(cx - w * 0.22f, cy + w * 0.17f); path2.close()
+                d.drawPath(path2, Color(0xFFFACC15))
+                d.drawLine(OUTLINE_C, Offset(cx, cy - w * 0.08f), Offset(cx, cy + w * 0.06f), max(1f, 0.03f * k))
+            }
+            ObstacleKind.CRATE -> {
+                d.drawRect(OUTLINE_C, Offset(l - ol + wob, top - ol), Size(w + ol * 2, h + ol * 2))
+                d.drawRect(Color(0xFFD97706), Offset(l + wob, top), Size(w, h))
+                val b = w * 0.14f
+                d.drawRect(Color(0xFF92400E), Offset(l + wob, top), Size(w, b))
+                d.drawRect(Color(0xFF92400E), Offset(l + wob, bot - b), Size(w, b))
+                d.drawLine(Color(0xFF92400E), Offset(l + wob, top), Offset(r + wob, bot), b * 0.8f)
+                // A coin peeking out: it's worth breaking
+                d.drawCircle(Color(0xFFFACC15), w * 0.12f, Offset((l + r) / 2f + wob, (top + bot) / 2f))
+            }
+            ObstacleKind.TARGET -> {
+                val cx = (l + r) / 2f; val cy = (top + bot) / 2f
+                val rad = min(w, h) / 2f
+                d.drawLine(Color(0xFF78350F), Offset(cx, cy), Offset(cx, sy(duel.groundY)), max(2f, 0.08f * k))
+                d.drawCircle(OUTLINE_C, rad + ol, Offset(cx + wob, cy))
+                val rings = longArrayOf(0xFFF8FAFC, 0xFFDC2626, 0xFFF8FAFC, 0xFFDC2626, 0xFFFACC15)
+                for (j in rings.indices) d.drawCircle(Color(rings[j]), rad * (1f - j * 0.19f), Offset(cx + wob, cy))
+            }
+        }
+    }
+
+    /** Now and then a fish leaps out of the sea and dives back in. */
+    private fun fish(d: DrawScope, groundY: Float, clock: Float) {
+        val gy = sy(groundY)
+        for (j in 0 until 2) {
+            val period = 5.5f + j * 2.3f
+            val t = (clock + j * 3.1f) % period
+            if (t > 1.1f) continue
+            val cycle = floor((clock + j * 3.1f) / period)
+            val baseX = camX + ((cycle * 7.3f + j * 11f) % 30f) - 15f
+            val u = t / 1.1f
+            val x = sx(baseX + u * 2.4f)
+            val y = gy - sin(u * Math.PI.toFloat()) * 1.5f * k
+            val ang = atan2(-cos(u * Math.PI.toFloat()) * 1.5f, 2.4f) * 57.3f
+            d.rotate(-ang, Offset(x, y)) {
+                drawOval(OUTLINE_C, Offset(x - 0.33f * k, y - 0.13f * k), Size(0.66f * k, 0.26f * k))
+                drawOval(Color(0xFFF97316), Offset(x - 0.3f * k, y - 0.1f * k), Size(0.6f * k, 0.2f * k))
+                path2.reset()
+                path2.moveTo(x - 0.25f * k, y); path2.lineTo(x - 0.48f * k, y - 0.14f * k); path2.lineTo(x - 0.48f * k, y + 0.14f * k); path2.close()
+                drawPath(path2, Color(0xFFEA580C))
+                drawCircle(OUTLINE_C, 0.035f * k, Offset(x + 0.17f * k, y - 0.02f * k))
+            }
+            // Splash rings where it leaves and where it lands
+            if (u < 0.15f || u > 0.85f) {
+                val sxp = if (u < 0.5f) sx(baseX) else sx(baseX + 2.4f)
+                d.drawOval(Color.White.copy(alpha = 0.7f), Offset(sxp - 0.3f * k, gy - 0.05f * k), Size(0.6f * k, 0.12f * k), style = thinStroke)
+            }
+        }
     }
 
     private fun boat(d: DrawScope, x: Float, y: Float, clock: Float) {

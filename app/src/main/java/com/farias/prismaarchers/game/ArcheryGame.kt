@@ -85,7 +85,14 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
     val ripples = FloatArray(RIPPLES * 3)
     private var rippleNext = 0
     /** Burning (fire arrow) until this clock time, per side. */
-    var enemyBurnUntil = -1f
+    /** Burning until this clock time, per enemy. */
+    val foeBurnUntil = FloatArray(8) { -1f }
+    /** Hit-stop: the world freezes for a blink on impact (real clock). */
+    private var freezeUntil = -1f
+    /** Zoom punch on impact (1 → 0) and red flash when the player is hurt. */
+    var punch = 0f
+        private set
+    var hurtFlash = 0f
         private set
     var playerBurnUntil = -1f
         private set
@@ -161,7 +168,9 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         killCamOn = false
         killArrow = null
         killAt = -1f
-        enemyBurnUntil = -1f
+        foeBurnUntil.fill(-1f)
+        punch = 0f
+        hurtFlash = 0f
         playerBurnUntil = -1f
         overview = false
         camX = d.player.rootX + VIEW_W * 0.28f
@@ -200,6 +209,25 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         return ok
     }
 
+    /** Two-player mode: the second player aims and shoots the enemy. */
+    fun aimEnemy(angle: Float, power: Float) {
+        if (mode != Mode.PLAY) return
+        aiming = true
+        aimAngle = angle
+        aimPower = power
+        duel.aimEnemy(angle, power)
+    }
+
+    fun releaseEnemy(angle: Float, power: Float, kind: Int = ArrowKind.NORMAL): Boolean {
+        if (mode != Mode.PLAY) return false
+        aiming = false
+        events.clear()
+        val ok = duel.releaseEnemy(angle, power, events, kind)
+        aimPower = 0f
+        handle(events)
+        return ok
+    }
+
     fun cancelAim() {
         aiming = false
         aimPower = 0f
@@ -213,7 +241,8 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         clock += rd
         val target = if (clock < slowUntil || killCamOn) 1f else 0f
         slow += (target - slow) * min(1f, rd * 10f)
-        val dt = rd * (1f - (if (killCamOn) 0.84f else 0.78f) * slow)
+        var dt = rd * (1f - (if (killCamOn) 0.84f else 0.78f) * slow)
+        if (clock < freezeUntil) dt = 0f
         if (mode == Mode.DEMO) demoBrain(dt)
         // Fixed sub-steps for stable physics.
         var left = dt
@@ -226,12 +255,16 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
             left -= h
         }
         stepHelmet(dt)
-        burning(duel.enemy, enemyBurnUntil)
         burning(duel.player, playerBurnUntil)
         dust(duel.player)
-        dust(duel.enemy)
         water(duel.player)
-        water(duel.enemy)
+        for (f in duel.foes) {
+            burning(f.body, foeBurnUntil[f.index.coerceAtMost(7)])
+            dust(f.body)
+            water(f.body)
+        }
+        punch *= exp(-rd * 7f)
+        hurtFlash *= exp(-rd * 4f)
         particles.update(dt)
         texts.removeAll { clock - it.born > 1.4f }
         shake *= exp(-rd * 8f)
@@ -366,6 +399,7 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         if (rnd.nextFloat() > 0.45f) return
         val d = duel
         val midY = (d.player.rootY + d.enemy.rootY) / 2f
+        if (d.foes.isEmpty()) return
         if (rnd.nextFloat() < 0.6f) {
             val fromLeft = rnd.nextBoolean()
             val x = if (fromLeft) -6f else d.spec.distance + 6f
@@ -457,7 +491,7 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
             }
             killAt >= 0f -> {
                 // After the killing blow: on the body (never on an arrow flying on).
-                val loser = if (d.turn == Duel.Turn.OVER) (if (d.playerWon) d.enemy else d.player) else if (d.enemyHp <= 0) d.enemy else d.player
+                val loser = if (d.playerHp <= 0) d.player else d.foes.getOrNull(d.lastFallen)?.body ?: d.enemy
                 tx = loser.x[Ragdoll.PELVIS]
                 ty = loser.y[Ragdoll.PELVIS] + 0.6f
                 tw = VIEW_W * (if (killCamOn) 0.7f else 1f)
@@ -469,10 +503,20 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
             }
             overview && d.turn != Duel.Turn.OVER -> {
                 // Both archers in view (the arrow too, it's always between them or near).
-                val x0 = min(d.player.rootX, d.enemy.rootX)
-                val x1 = max(d.player.rootX, d.enemy.rootX)
+                // Player and every enemy still standing (capped so they don't get too tiny).
+                var x0 = d.player.rootX
+                var x1 = d.player.rootX
+                var y0 = d.player.rootY
+                var y1 = d.player.rootY
+                for (f in d.foes) {
+                    if (!f.alive && f.index != d.activeFoe) continue
+                    x0 = min(x0, f.body.rootX); x1 = max(x1, f.body.rootX)
+                    y0 = min(y0, f.body.rootY); y1 = max(y1, f.body.rootY)
+                }
+                for (o in d.obstacles) if (o.alive && o.kind == ObstacleKind.TARGET) { x1 = max(x1, o.x1) }
+                x1 = min(x1, x0 + 48f)
                 tx = (x0 + x1) / 2f
-                ty = (d.player.rootY + d.enemy.rootY) / 2f + 1.4f
+                ty = (y0 + y1) / 2f + 1.4f
                 tw = (x1 - x0) + 7f
                 if (a != null && (a.x < x0 - 3f || a.x > x1 + 3f)) tx = a.x.coerceIn(x0 - 6f, x1 + 6f)
             }
@@ -482,7 +526,7 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
                 ty = a.y + 0.4f
             }
             d.turn == Duel.Turn.OVER -> {
-                val loser = if (d.playerWon) d.enemy else d.player
+                val loser = if (d.playerWon) (d.foes.getOrNull(d.lastFallen)?.body ?: d.enemy) else d.player
                 tx = loser.x[Ragdoll.PELVIS]
                 ty = loser.y[Ragdoll.PELVIS] + 0.6f
                 tw = VIEW_W * (1f - 0.25f * slow)
@@ -514,6 +558,17 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         for (e in list) {
             when (e) {
                 is DuelEvent.Hit -> {
+                    // Impact weight: a blink of hit-stop and a zoom punch; coins pop out of hit enemies.
+                    if (e.damage > 0) {
+                        freezeUntil = clock + if (e.kill) 0.08f else 0.05f
+                        punch = if (e.kill) 1f else 0.6f
+                    }
+                    if (!e.byPlayer && e.damage > 0) hurtFlash = 1f
+                    if (e.byPlayer && e.damage > 0 && mode == Mode.PLAY) {
+                        repeat(4 + e.damage / 20) {
+                            particles.add(e.x, e.y, (rnd.nextFloat() - 0.5f) * 3f, 3f + rnd.nextFloat() * 3f, COIN_C[0], COIN_C[1], COIN_C[2], 0.07f, 0.9f)
+                        }
+                    }
                     val c = if (e.part == Part.HEAD) HEAD_SPARK else HIT_SPARK
                     burst(e.x, e.y, if (e.kill) 60 else 26, c, if (e.kill) 6f else 4f)
                     if (e.pierce) burst(e.x, e.y, 30, HEAD_SPARK, 8f)
@@ -525,16 +580,19 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
                     }
                     if (e.kind == ArrowKind.FIRE) {
                         burst(e.x, e.y, 30, FIRE_A, 4f)
-                        if (e.byPlayer) enemyBurnUntil = clock + 2.5f else playerBurnUntil = clock + 2.5f
+                        if (e.byPlayer) { if (e.foe in 0..7) foeBurnUntil[e.foe] = clock + 2.5f } else playerBurnUntil = clock + 2.5f
                     }
                     if (e.kind == ArrowKind.ICE) burst(e.x, e.y, 30, ICE_C, 3.5f)
                     if (e.kill || (e.part == Part.HEAD && e.byPlayer)) {
                         slowUntil = clock + if (e.kill) 1.4f else 0.6f
                     }
-                    if (e.kill) {
+                    if (e.kill && e.final) {
                         recorder.markKill()
                         killAt = clock
                         slowUntil = clock + 1.1f
+                    } else if (e.kill) {
+                        // One of several enemies down: a short slow-motion beat.
+                        slowUntil = clock + 0.5f
                     }
                 }
                 is DuelEvent.Miss -> if (e.ground) {
@@ -552,11 +610,13 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
                     shake = max(shake, 0.9f)
                     blastFlash = 1f
                     if (e.damage > 0) texts.add(WorldText("-${e.damage}", e.x, e.y + 0.6f, 0, clock))
-                    if (e.kill) {
+                    punch = 1f
+                    freezeUntil = clock + 0.06f
+                    if (e.final) {
                         slowUntil = clock + 1.1f
                         killAt = clock
                         recorder.markKill()
-                    }
+                    } else if (e.kill) slowUntil = clock + 0.5f
                 }
                 is DuelEvent.HelmetOff -> {
                     helmet.active = true
@@ -570,15 +630,18 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
                 is DuelEvent.ShieldHit -> {
                     burst(e.x, e.y, 40, SHIELD_C, 5f)
                     shake = max(shake, 0.3f)
-                    if (e.left == 0) burst(duel.enemy.x[Ragdoll.CHEST], duel.enemy.y[Ragdoll.CHEST], 60, SHIELD_C, 6f)
+                    val sb = duel.foes.getOrNull(e.foe)?.body
+                    if (e.left == 0 && sb != null) burst(sb.x[Ragdoll.CHEST], sb.y[Ragdoll.CHEST], 60, SHIELD_C, 6f)
                 }
                 is DuelEvent.Frozen -> burst(e.x, e.y, 40, ICE_C, 3f)
                 is DuelEvent.Thaw -> burst(e.x, e.y, 30, ICE_C, 2.5f)
                 is DuelEvent.Fell -> {
                     // Shoved off the edge: slow motion on the fall.
-                    killAt = clock
-                    slowUntil = clock + 1.1f
-                    recorder.markKill()
+                    if (e.final) {
+                        killAt = clock
+                        slowUntil = clock + 1.1f
+                        recorder.markKill()
+                    } else slowUntil = clock + 0.6f
                     shake = max(shake, 0.4f)
                     burst(e.x, e.y, 20, DUST, 2.5f)
                 }
@@ -587,6 +650,28 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
                     burst(e.x, e.y - 0.4f, 24, HEAL_C, 2f)
                 }
                 is DuelEvent.TurnStart -> if (e.player) maybeSpawnProp()
+                is DuelEvent.ObstacleHit -> {
+                    val c = when (e.kind) {
+                        ObstacleKind.WOOD, ObstacleKind.CRATE -> WOOD_C
+                        ObstacleKind.WALL -> DUST
+                        else -> METAL
+                    }
+                    burst(e.x, e.y, if (e.broken) 45 else 12, c, if (e.broken) 5f else 2.5f)
+                    if (e.broken) shake = max(shake, 0.3f)
+                    if (e.kind == ObstacleKind.CRATE && e.broken) repeat(10) {
+                        particles.add(e.x, e.y, (rnd.nextFloat() - 0.5f) * 4f, 3f + rnd.nextFloat() * 4f, COIN_C[0], COIN_C[1], COIN_C[2], 0.08f, 1.1f)
+                    }
+                }
+                is DuelEvent.Ricochet -> {
+                    burst(e.x, e.y, 22, HEAD_SPARK, 5f)
+                    punch = 0.5f
+                }
+                is DuelEvent.TargetHit -> {
+                    burst(e.x, e.y, 30 + e.points * 3, if (e.points >= 10) HEAD_SPARK else WOOD_C, 4f)
+                    texts.add(WorldText("+${e.points}", e.x, e.y + 0.5f, if (e.points >= 10) 1 else 0, clock))
+                    if (e.points >= 10) { flash = 0.6f; freezeUntil = clock + 0.07f }
+                    punch = 0.6f
+                }
                 else -> Unit
             }
             if (mode == Mode.PLAY) listener(e)
@@ -603,9 +688,16 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
 
     /** Player's shot guide: points of the first part of the flight. */
     fun guide(out: FloatArray): Int {
+        if (duel.versus && duel.turn == Duel.Turn.ENEMY) {
+            val e = duel.enemy
+            return Duel.preview(e.bowX(), e.bowY(), -1f, aimAngle, aimPower, duel.spec.wind, guideSeconds, out)
+        }
         val p = duel.player
-        return Duel.preview(p.bowX(), p.bowY(), 1f, aimAngle, aimPower, duel.spec.wind, 0.38f, out)
+        return Duel.preview(p.bowX(), p.bowY(), 1f, aimAngle, aimPower, duel.spec.wind, guideSeconds, out)
     }
+
+    /** How much of the flight the aim guide shows (seconds; the Guide talent makes it longer). */
+    var guideSeconds = 0.38f
 
     companion object {
         /** Visible world width (meters) in portrait. */
@@ -623,6 +715,8 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         val HEAL_C = floatArrayOf(0.45f, 1f, 0.55f)
         val FEATHER = floatArrayOf(0.95f, 0.95f, 0.98f)
         val BALLOON_C = floatArrayOf(1f, 0.3f, 0.45f)
+        val COIN_C = floatArrayOf(1f, 0.82f, 0.2f)
+        val WOOD_C = floatArrayOf(0.62f, 0.42f, 0.22f)
         val WATER = floatArrayOf(0.62f, 0.86f, 1f)
         val BUBBLE = floatArrayOf(0.85f, 0.95f, 1f)
         const val RIPPLES = 8
@@ -637,13 +731,14 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
  */
 class Recorder {
     val pX = FloatArray(CAP * Ragdoll.N); val pY = FloatArray(CAP * Ragdoll.N)
-    val eX = FloatArray(CAP * Ragdoll.N); val eY = FloatArray(CAP * Ragdoll.N)
-    val alive = BooleanArray(CAP * 2)
+    val eX = FloatArray(CAP * Ragdoll.N * FOES); val eY = FloatArray(CAP * Ragdoll.N * FOES)
+    val alive = BooleanArray(CAP * (1 + FOES))
+    val foeCount = IntArray(CAP)
     val cam = FloatArray(CAP * 3)
     val ax = FloatArray(CAP * ARROWS); val ay = FloatArray(CAP * ARROWS); val aa = FloatArray(CAP * ARROWS)
     val aKind = IntArray(CAP * ARROWS)
     val aCount = IntArray(CAP)
-    val helmetOn = BooleanArray(CAP)
+    val helmet = BooleanArray(CAP * FOES)
     /** Frames written so far (frame f lives at f % CAP). */
     var frames = 0
         private set
@@ -671,12 +766,17 @@ class Recorder {
         val d = g.duel
         System.arraycopy(d.player.x, 0, pX, i * Ragdoll.N, Ragdoll.N)
         System.arraycopy(d.player.y, 0, pY, i * Ragdoll.N, Ragdoll.N)
-        System.arraycopy(d.enemy.x, 0, eX, i * Ragdoll.N, Ragdoll.N)
-        System.arraycopy(d.enemy.y, 0, eY, i * Ragdoll.N, Ragdoll.N)
-        alive[i * 2] = d.player.alive
-        alive[i * 2 + 1] = d.enemy.alive
+        val nf = min(FOES, d.foes.size)
+        foeCount[i] = nf
+        alive[i * (1 + FOES)] = d.player.alive
+        for (q in 0 until nf) {
+            val b = d.foes[q].body
+            System.arraycopy(b.x, 0, eX, (i * FOES + q) * Ragdoll.N, Ragdoll.N)
+            System.arraycopy(b.y, 0, eY, (i * FOES + q) * Ragdoll.N, Ragdoll.N)
+            alive[i * (1 + FOES) + 1 + q] = b.alive
+            helmet[i * FOES + q] = d.foes[q].helmetOn
+        }
         cam[i * 3] = g.camX; cam[i * 3 + 1] = g.camY; cam[i * 3 + 2] = g.viewW
-        helmetOn[i] = d.helmetOn
         var n = 0
         // Arrows in the air first, then the newest stuck in bodies.
         for (a in d.inFlight) {
@@ -708,6 +808,7 @@ class Recorder {
 
     companion object {
         const val CAP = 160
+        const val FOES = 5
         const val ARROWS = 8
         /** Frames before the kill shown in the replay (≈1.7 s) and seconds kept after it. */
         const val BEFORE = 50

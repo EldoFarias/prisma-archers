@@ -151,6 +151,36 @@ class GameHost(context: Context) {
         private set
     var bubbleEnemy = true
         private set
+    /** Which enemy says it. */
+    var bubbleFoe = 0
+        private set
+    /** Per enemy: look, bow and "Name • Lv 12" label. */
+    var foeOutfits: List<Outfit> = emptyList()
+        private set
+    var foeBows: List<Bow> = emptyList()
+        private set
+    var foeLabels: List<String> = emptyList()
+        private set
+    /** Mode of this match (GameMode). */
+    var mode by mutableIntStateOf(GameMode.DUEL)
+        private set
+    /** Enemies left standing (for the HUD). */
+    var foesLeft by mutableIntStateOf(1)
+        private set
+    var foesTotal by mutableIntStateOf(1)
+        private set
+    /** Two players: it's the second player's turn (aiming the enemy). */
+    var enemyTurn by mutableStateOf(false)
+        private set
+    /** Target practice: arrows left and points. */
+    var arrowsLeft by mutableIntStateOf(0)
+        private set
+    var targetScore by mutableIntStateOf(0)
+        private set
+    private var killsThisShot = 0
+    /** Two players: who won (1 or 2). */
+    var versusWinner by mutableIntStateOf(0)
+        private set
     /** "Name • Lv 12" shown over the enemy. */
     var enemyLabel = ""
         private set
@@ -186,14 +216,29 @@ class GameHost(context: Context) {
         enemyOutfit = Looks.enemyOutfit(spec.number, spec.boss)
         enemyBow = Looks.enemyBow(spec.number)
         windKmh = game.duel.windKmh()
-        val name = when (spec.power) {
-            BossPower.SHIELD -> "Sir Brann"
-            BossPower.FOCUS -> "Kenji"
-            BossPower.DOUBLE -> "Bjorn"
-            BossPower.HEAL -> "Aldric"
-            else -> NAMES[(spec.number * 7 + (spec.seed % 5).toInt().coerceAtLeast(0)) % NAMES.size]
+        val outs = ArrayList<Outfit>()
+        val bows = ArrayList<Bow>()
+        val labels = ArrayList<String>()
+        for ((i, f) in spec.foes.withIndex()) {
+            val o = if (i == 0) enemyOutfit else Looks.enemyOutfit(spec.number + i * 3, f.boss)
+            outs.add(o)
+            bows.add(if (i == 0) enemyBow else Looks.enemyBow(spec.number + i))
+            val name = when {
+                spec.mode == GameMode.VERSUS -> app.getString(R.string.player_2)
+                f.power == BossPower.SHIELD -> "Sir Brann"
+                f.power == BossPower.FOCUS -> "Kenji"
+                f.power == BossPower.DOUBLE -> "Bjorn"
+                f.power == BossPower.HEAL -> "Aldric"
+                else -> NAMES[((spec.number * 7 + i * 5 + (spec.seed % 5).toInt()) % NAMES.size + NAMES.size) % NAMES.size]
+            }
+            labels.add(if (spec.mode == GameMode.VERSUS) name else name + " • " + app.getString(R.string.lv_x, spec.number + i))
         }
-        enemyLabel = name + " • " + app.getString(R.string.lv_x, spec.number)
+        foeOutfits = outs
+        foeBows = bows
+        foeLabels = labels
+        enemyLabel = labels.firstOrNull() ?: ""
+        foesTotal = spec.foes.size
+        foesLeft = spec.foes.size
         bossHintRes = when (spec.power) {
             BossPower.SHIELD -> R.string.boss_shield
             BossPower.FOCUS -> R.string.boss_focus
@@ -221,8 +266,10 @@ class GameHost(context: Context) {
 
     private fun say(enemy: Boolean, options: IntArray, chance: Float, delay: Float = 0f) {
         if (rnd.nextFloat() > chance) return
+        if (mode != GameMode.DUEL) return
         bubbleText = app.getString(options[rnd.nextInt(options.size)])
         bubbleEnemy = enemy
+        bubbleFoe = game.duel.activeFoe
         bubbleAt = game.clock + delay
     }
 
@@ -290,7 +337,25 @@ class GameHost(context: Context) {
         start(survivalSpec(0), false, 1)
     }
 
+    /** Two players on the same phone, passing it around. */
+    fun playVersus() {
+        daily = false
+        endless = false
+        level = 0
+        start(Levels.versus(System.nanoTime() % 1000), false, 1 + ((System.nanoTime() / 7) % 8).toInt() * 10, GameMode.VERSUS)
+    }
+
+    /** Target practice: [PRACTICE_ARROWS] arrows at boards. */
+    fun playTargets() {
+        daily = false
+        endless = false
+        level = 0
+        start(Levels.targets(System.nanoTime()), false, 1 + ((System.nanoTime() / 13) % 8).toInt() * 10, GameMode.TARGETS)
+    }
+
     fun retry() {
+        if (mode == GameMode.VERSUS) return playVersus()
+        if (mode == GameMode.TARGETS) return playTargets()
         when {
             endless -> playEndless()
             daily -> playDaily()
@@ -302,8 +367,13 @@ class GameHost(context: Context) {
 
     private fun survivalSpec(k: Int): LevelSpec = Levels.level(4 + k * 3, salt = endlessSeed + k)
 
-    private fun start(spec: LevelSpec, keepScore: Boolean, worldLevel: Int) {
+    private fun start(spec: LevelSpec, keepScore: Boolean, worldLevel: Int, gameMode: Int = GameMode.DUEL) {
         Progress.ensureMissionDay()
+        mode = gameMode
+        enemyTurn = false
+        arrowsLeft = if (gameMode == GameMode.TARGETS) PRACTICE_ARROWS else 0
+        targetScore = 0
+        killsThisShot = 0
         runBase = if (keepScore) score else 0
         score = runBase
         touched = false
@@ -337,7 +407,14 @@ class GameHost(context: Context) {
         phase = Phase.PLAYING
         applyLooks()
         Progress.useTrialGame()
-        game.startPlay(spec)
+        // Talents: more health, a longer aim guide, a shield to start with (not in the 2-player mode).
+        val solo = gameMode == GameMode.DUEL
+        val hp = if (solo) 100 + 10 * Progress.talent(com.farias.prismaarchers.data.Talents.HEALTH) else 100
+        val startShields = if (solo) Progress.talent(com.farias.prismaarchers.data.Talents.SHIELD) else 0
+        game.guideSeconds = 0.38f + (if (gameMode != GameMode.VERSUS) 0.1f * Progress.talent(com.farias.prismaarchers.data.Talents.GUIDE) else 0f)
+        game.startPlay(spec, hp, startShields)
+        shields = startShields
+        game.duel.player.cheerStyle = Progress.danceId
         game.overview = overview
         duelId++
         setOpponent(spec, worldLevel)
@@ -389,8 +466,8 @@ class GameHost(context: Context) {
             touched = true
             notice = 0
         }
-        game.aim(angle, power)
-        if (!drawSoundPlayed && power > 0.15f && game.duel.turn == Duel.Turn.PLAYER) {
+        if (mode == GameMode.VERSUS && game.duel.turn == Duel.Turn.ENEMY) game.aimEnemy(angle, power) else game.aim(angle, power)
+        if (!drawSoundPlayed && power > 0.15f && (game.duel.turn == Duel.Turn.PLAYER || enemyTurn)) {
             drawSoundPlayed = true
             sound.play(Sfx.DRAW, 0.7f)
         }
@@ -402,7 +479,11 @@ class GameHost(context: Context) {
             game.cancelAim()
             return
         }
-        val kind = if (selectedArrow != ArrowKind.NORMAL && Progress.arrowCount(selectedArrow) > 0) selectedArrow else ArrowKind.NORMAL
+        if (mode == GameMode.VERSUS && game.duel.turn == Duel.Turn.ENEMY) {
+            game.releaseEnemy(angle, power)
+            return
+        }
+        val kind = if (mode == GameMode.DUEL && selectedArrow != ArrowKind.NORMAL && Progress.arrowCount(selectedArrow) > 0) selectedArrow else ArrowKind.NORMAL
         val shot = game.release(angle, power, kind)
         if (shot && !Progress.tutorialDone) Progress.markTutorial(true)
         if (shot && kind != ArrowKind.NORMAL) {
@@ -438,6 +519,19 @@ class GameHost(context: Context) {
             nextOpponentAt = -1f
             nextSurvivalOpponent()
         }
+        if (mode == GameMode.TARGETS && phase == Phase.PLAYING && arrowsLeft == 0 && game.duel.inFlight.isEmpty()) {
+            // Out of arrows: show the result.
+            newBest = Progress.onTargets(targetScore)
+            stars = when {
+                targetScore >= 45 -> 3
+                targetScore >= 25 -> 2
+                else -> 1
+            }
+            lastReward = targetScore / 2
+            Progress.addCoins(lastReward)
+            phase = Phase.WON
+            sound.play(Sfx.RECORD)
+        }
     }
 
     private fun nextSurvivalOpponent() {
@@ -460,6 +554,8 @@ class GameHost(context: Context) {
         val duel = game.duel
         when (e) {
             is DuelEvent.Shot -> {
+                if (e.byPlayer) killsThisShot = 0
+                if (e.byPlayer && mode == GameMode.TARGETS) arrowsLeft = (arrowsLeft - 1).coerceAtLeast(0)
                 sound.play(Sfx.SHOOT, 0.9f, if (e.byPlayer) 1f else 0.9f)
                 if (e.kind == ArrowKind.FIRE) sound.play(Sfx.WHOOSH, 0.6f, 0.7f)
                 if (e.byPlayer) haptic(Haptic.TICK)
@@ -474,6 +570,15 @@ class GameHost(context: Context) {
                     if (head) { heads++; headsThisDuel++ }
                     if (duel.spec.distance >= LONG_SHOT) longHits++
                     score += e.damage + if (head) HEAD_BONUS else 0
+                    // A coin for every arrow that hurts (solo only)
+                    if (mode == GameMode.DUEL && e.damage > 0) Progress.addCoins(1)
+                    if (e.kill) {
+                        killsThisShot++
+                        foesLeft = duel.aliveFoes
+                        if (killsThisShot == 2) showTitle(R.string.title_multi, 150)
+                        else if (!e.final) score += 50
+                    }
+                    if (e.ricochet) showTitle(R.string.title_bank, 120)
                     haptic(when {
                         e.kill -> Haptic.HEAVY
                         head -> Haptic.COMBO
@@ -481,7 +586,7 @@ class GameHost(context: Context) {
                         else -> Haptic.PLACE
                     })
                     playerHitTitle(e, head)
-                    if (!e.kill && duel.enemy.alive) say(true, TAUNT_OUCH, 0.35f, 0.3f)
+                    if (!e.kill && duel.foes.getOrNull(e.foe)?.alive == true) say(true, TAUNT_OUCH, 0.35f, 0.3f)
                 } else {
                     if (e.damage > 0) tookDamage = true
                     if (e.damage == 0 && shields > 0) shields--
@@ -500,7 +605,9 @@ class GameHost(context: Context) {
                 }
             }
             is DuelEvent.TurnStart -> {
-                myTurn = e.player
+                myTurn = e.player || mode == GameMode.VERSUS
+                enemyTurn = !e.player && mode == GameMode.VERSUS
+                foesLeft = duel.aliveFoes
                 if (!e.player) sound.play(Sfx.DRAW, 0.45f, 0.9f)
             }
             is DuelEvent.Explode -> {
@@ -510,7 +617,12 @@ class GameHost(context: Context) {
                     hits++
                     score += e.damage
                 }
-                if (e.byPlayer && e.kill && titleShot != duel.shotsFired) {
+                if (e.byPlayer || e.barrel) {
+                    killsThisShot += e.kills
+                    foesLeft = duel.aliveFoes
+                }
+                if (e.kills >= 2) showTitle(R.string.title_multi, 150)
+                else if ((e.byPlayer || e.barrel) && e.kill && titleShot != duel.shotsFired) {
                     titleShot = duel.shotsFired
                     showTitle(R.string.title_boom, 75)
                 }
@@ -530,7 +642,28 @@ class GameHost(context: Context) {
             is DuelEvent.Fell -> {
                 sound.play(Sfx.WHOOSH, 1f, 0.7f)
                 haptic(Haptic.HEAVY)
+                foesLeft = duel.aliveFoes
                 if (e.enemy) showTitle(R.string.title_fall, 100)
+            }
+            is DuelEvent.ObstacleHit -> {
+                when (e.kind) {
+                    ObstacleKind.WOOD, ObstacleKind.CRATE -> sound.play(Sfx.STICK, 0.9f, if (e.broken) 0.7f else 1f)
+                    ObstacleKind.WALL -> sound.play(Sfx.STICK, 0.7f, 0.8f)
+                    else -> sound.play(Sfx.HIT, 0.6f, 1.4f)
+                }
+                if (e.broken) sound.play(Sfx.GLASS, 0.5f, 0.6f)
+                if (e.kind == ObstacleKind.CRATE && e.broken && e.byPlayer && mode == GameMode.DUEL) showTitle(R.string.title_crate, 20, CRATE_COINS)
+            }
+            is DuelEvent.Ricochet -> {
+                sound.play(Sfx.HEADSHOT, 0.7f, 1.6f)
+                haptic(Haptic.PLACE)
+            }
+            is DuelEvent.TargetHit -> {
+                targetScore += e.points
+                score += e.points * 10
+                sound.play(if (e.points >= 10) Sfx.HEADSHOT else Sfx.STICK, 1f, if (e.points >= 10) 1.2f else 1f)
+                haptic(if (e.points >= 10) Haptic.COMBO else Haptic.PLACE)
+                if (e.points >= 10) showTitle(R.string.title_bullseye, 0)
             }
             is DuelEvent.Bonus -> {
                 sound.play(Sfx.COIN, 1f, 1.2f)
@@ -561,6 +694,16 @@ class GameHost(context: Context) {
 
     private fun onOver(won: Boolean) {
         val duel = game.duel
+        if (mode == GameMode.VERSUS) {
+            // Two players: whoever is left standing wins; no progress or coins.
+            stars = 3
+            lastReward = 0
+            phase = Phase.WON
+            versusWinner = if (won) 1 else 2
+            sound.play(Sfx.RECORD)
+            haptic(Haptic.COMBO)
+            return
+        }
         if (won) {
             score += WIN_BONUS + duel.playerHp
             Progress.addStats(
@@ -617,7 +760,8 @@ class GameHost(context: Context) {
             Progress.missionEvent(MissionType.LEVELS, 1)
             Progress.missionEvent(MissionType.STREAK, Progress.winStreak, asMax = true)
             lastReward = if (daily) Progress.onDailyWon()
-            else (Progress.levelReward(level) * (if (boss) 3 else 1) + headsThisDuel * 5).also { Progress.addCoins(it) }
+            else ((Progress.levelReward(level) * (if (boss) 3 else 1) + headsThisDuel * 5 + (foesTotal - 1) * 6) *
+                (1f + 0.1f * Progress.talent(com.farias.prismaarchers.data.Talents.COINS))).toInt().also { Progress.addCoins(it) }
         } else {
             lastReward = 0
         }
@@ -634,6 +778,8 @@ class GameHost(context: Context) {
         const val WIN_BONUS = 100
         const val LONG_SHOT = 24f
         const val BIRD_COINS = 5
+        const val CRATE_COINS = 8
+        const val PRACTICE_ARROWS = 8
         const val BALLOON_COINS = 10
         private val NAMES = arrayOf("Rolf", "Kira", "Bruno", "Yuki", "Ragnar", "Zara", "Igor", "Luna", "Hugo", "Nina", "Taro", "Vex", "Dante", "Mila", "Orion", "Sasha", "Fenn", "Ivy")
         private val TAUNT_HELLO = intArrayOf(R.string.taunt_hello_1, R.string.taunt_hello_2, R.string.taunt_hello_3)

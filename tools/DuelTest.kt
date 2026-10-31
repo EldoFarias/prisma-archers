@@ -10,7 +10,10 @@ fun playDuel(spec: LevelSpec, playerErr: Float, seed: Int): Triple<Boolean, Int,
     var shots = 0
     while (!d.finished && t < 300f) {
         if (d.turn == Duel.Turn.PLAYER) {
-            val (a, p) = Duel.solveShot(d.player.bowX(), d.player.bowY(), 1f, d.enemy.x[Ragdoll.CHEST], d.enemy.y[Ragdoll.CHEST], spec.wind)
+            // A human sees the wall/shield in the way and lobs over it.
+            val tgt = (d.foes.firstOrNull { it.alive } ?: d.foes[0]).body
+            val shot = d.aimAround(d.player.bowX(), d.player.bowY(), 1f, tgt.x[Ragdoll.CHEST], tgt.y[Ragdoll.CHEST], tgt.rootX - 0.4f)
+            val (a, p) = shot
             val learn = (1f - shots * 0.25f).coerceAtLeast(0.3f)
             pShots++
             d.releasePlayer(a + (rnd.nextFloat() * 2 - 1) * 0.12f * playerErr * learn, (p + (rnd.nextFloat() * 2 - 1) * 0.15f * playerErr * learn).coerceIn(0.1f, 1f), ev)
@@ -31,7 +34,7 @@ fun playDuel(spec: LevelSpec, playerErr: Float, seed: Int): Triple<Boolean, Int,
 
 var pHits = 0; var pShots = 0; var eHits = 0; var eShots = 0; var pMissGround = 0
 fun table() {
-    for (n in listOf(1, 3, 7, 13, 25, 37, 55, 77, 99, 20, 50)) {
+    for (n in listOf(1, 3, 4, 7, 9, 12, 13, 14, 19, 25, 37, 55, 77, 99, 20, 50)) {
         val spec = Levels.level(n)
         var wins = 0; var time = 0f
         pHits = 0; pShots = 0; eHits = 0; eShots = 0; pMissGround = 0

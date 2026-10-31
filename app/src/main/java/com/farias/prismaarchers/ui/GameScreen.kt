@@ -74,6 +74,7 @@ import com.farias.prismaarchers.game.GameHost.Phase
 import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.atan2
+import com.farias.prismaarchers.game.GameMode
 import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -127,7 +128,8 @@ fun GameScreen(host: GameHost, ads: AdsManager, sound: SoundManager, onGreatMome
                             val len = sqrt(dx * dx + dy * dy)
                             power = (len / (short * FULL_POWER_DRAG)).coerceIn(0f, 1f)
                             // Pull left/down → shoot right/up.
-                            if (len > 4f) angle = atan2(dy, -dx).coerceIn(-1.2f, 1.45f)
+                            // In the 2-player mode the second player faces left: mirror the pull.
+                            if (len > 4f) angle = (if (host.enemyTurn) atan2(dy, dx) else atan2(dy, -dx)).coerceIn(-1.2f, 1.45f)
                             host.aim(angle, power)
                         }
                         dragging.value = false
@@ -164,7 +166,13 @@ fun GameScreen(host: GameHost, ads: AdsManager, sound: SoundManager, onGreatMome
                 PanoramaButton(host.overview) { host.toggleOverview() }
             }
             Spacer(Modifier.height(8.dp))
-            ScoreText(host)
+            if (host.mode == GameMode.TARGETS) {
+                Text(stringResource(R.string.points_x, host.targetScore), style = Styles.glow(30, Color.White, FontWeight.Black))
+                Text(stringResource(R.string.arrows_left, host.arrowsLeft), style = Styles.plain(15, Palette.Gold, FontWeight.Black))
+            } else if (host.mode == GameMode.DUEL) {
+                ScoreText(host)
+                if (host.foesTotal > 1) EnemiesPill(host.foesLeft, host.foesTotal)
+            }
             if (host.windKmh != 0) {
                 Spacer(Modifier.height(4.dp))
                 WindPill(host.windKmh)
@@ -177,7 +185,7 @@ fun GameScreen(host: GameHost, ads: AdsManager, sound: SoundManager, onGreatMome
             NoticeCard(host.notice, Modifier.align(Alignment.Center).padding(bottom = 60.dp, start = 24.dp, end = 24.dp)) { host.clearNotice() }
         }
 
-        if (!host.touched && host.phase == Phase.PLAYING && host.shields == 0 && ads.rewardedReady &&
+        if (!host.touched && host.phase == Phase.PLAYING && host.shields == 0 && ads.rewardedReady && host.mode == GameMode.DUEL &&
             (host.boss || host.endless || host.failsHere >= 1)
         ) {
             ShieldOffer(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 175.dp)) {
@@ -186,16 +194,18 @@ fun GameScreen(host: GameHost, ads: AdsManager, sound: SoundManager, onGreatMome
         }
 
         if (host.phase == Phase.PLAYING && !host.paused) {
-            if (!host.touched && (Progress.levelsWon < 3 || host.level <= 2) && !host.endless) {
+            if (!host.touched && (Progress.levelsWon < 3 || host.level <= 2) && !host.endless && host.mode == GameMode.DUEL) {
                 DragHint(Modifier.align(Alignment.Center).padding(top = 40.dp))
-            } else {
+            } else if (host.mode == GameMode.VERSUS) {
+                TurnPill(!host.enemyTurn, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 70.dp), versus = true)
+            } else if (host.mode == GameMode.DUEL) {
                 TurnPill(host.myTurn, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 70.dp))
             }
         }
 
         if (host.phase == Phase.PLAYING) DuelIntro(host, Modifier.align(Alignment.Center).padding(bottom = 120.dp))
 
-        if (host.phase == Phase.PLAYING && !host.paused) {
+        if (host.phase == Phase.PLAYING && !host.paused && host.mode == GameMode.DUEL) {
             SpecialArrowBar(host, ads, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 108.dp))
         }
 
@@ -206,6 +216,8 @@ fun GameScreen(host: GameHost, ads: AdsManager, sound: SoundManager, onGreatMome
         when {
             host.paused -> PauseOverlay(host, ads, onHome)
             host.phase == Phase.DEAD -> DeadOverlay(host, ads, sound, onHome)
+            host.phase == Phase.WON && host.mode == GameMode.VERSUS -> VersusOverlay(host, ads, sound, onHome)
+            host.phase == Phase.WON && host.mode == GameMode.TARGETS -> TargetsOverlay(host, ads, sound, onHome)
             host.phase == Phase.WON -> WinOverlay(host, ads, sound, onGreatMoment, onHome)
         }
     }
@@ -225,6 +237,8 @@ private fun TitlePill(host: GameHost) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         when {
+            host.mode == GameMode.VERSUS -> Text(stringResource(R.string.mode_versus), style = Styles.plain(16, Color.White, FontWeight.Black))
+            host.mode == GameMode.TARGETS -> Text(stringResource(R.string.mode_targets), style = Styles.plain(16, Color.White, FontWeight.Black))
             host.endless -> {
                 Text("∞", style = Styles.glow(20, Palette.Cyan, FontWeight.Black))
                 Spacer(Modifier.width(8.dp))
@@ -265,7 +279,7 @@ private fun WindPill(kmh: Int) {
 }
 
 @Composable
-private fun TurnPill(mine: Boolean, modifier: Modifier) {
+private fun TurnPill(mine: Boolean, modifier: Modifier, versus: Boolean = false) {
     val shape = RoundedCornerShape(50)
     // Slides and pops when the turn changes.
     androidx.compose.animation.AnimatedContent(
@@ -288,7 +302,7 @@ private fun TurnPill(mine: Boolean, modifier: Modifier) {
             Box(Modifier.size(8.dp).clip(RoundedCornerShape(50)).background(if (m) Color(0xFF34D399) else Color(0xFFF43F5E)))
             Spacer(Modifier.width(8.dp))
             Text(
-                stringResource(if (m) R.string.your_turn else R.string.enemy_turn),
+                stringResource(if (versus) (if (m) R.string.player_1 else R.string.player_2) else if (m) R.string.your_turn else R.string.enemy_turn),
                 style = Styles.plain(14, if (m) Color(0xFFA7F3D0) else Color(0xFFFCA5A5), FontWeight.Black),
             )
         }
@@ -342,6 +356,8 @@ private fun DuelIntro(host: GameHost, modifier: Modifier) {
     val done by remember(host.duelId) { androidx.compose.runtime.derivedStateOf { anim.value >= 1f } }
     if (done) return
     val title = when {
+        host.mode == GameMode.VERSUS -> stringResource(R.string.mode_versus)
+        host.mode == GameMode.TARGETS -> stringResource(R.string.mode_targets)
         host.endless -> stringResource(R.string.kills_x, host.kills)
         host.daily -> stringResource(R.string.daily_short)
         else -> stringResource(R.string.level_x, host.level)
@@ -360,6 +376,9 @@ private fun DuelIntro(host: GameHost, modifier: Modifier) {
         if (host.boss) CrownIcon(Modifier.size(46.dp, 34.dp))
         Text(title.uppercase(), style = Styles.gradient(44), textAlign = TextAlign.Center)
         Text(stringResource(host.world.nameRes), style = Styles.glow(18, Color.White, FontWeight.ExtraBold))
+        if (host.foesTotal > 1 && host.mode == GameMode.DUEL) {
+            Text(stringResource(R.string.enemies_left, host.foesTotal, host.foesTotal), style = Styles.glow(17, Color(0xFFFCA5A5), FontWeight.Black))
+        }
         Spacer(Modifier.height(6.dp))
         Text("⚔", style = Styles.glow(30, Palette.Gold, FontWeight.Black))
     }
@@ -844,6 +863,72 @@ private fun ReplayView(host: GameHost) {
             Box(Modifier.size(8.dp).graphicsLayer { alpha = a }.clip(RoundedCornerShape(50)).background(Color(0xFFF43F5E)))
             Spacer(Modifier.width(6.dp))
             Text(stringResource(R.string.replay), style = Styles.plain(11, Color.White, FontWeight.Black))
+        }
+    }
+}
+
+/** "Enemies 3/5" with one little head per enemy (crossed out when beaten). */
+@Composable
+private fun EnemiesPill(left: Int, total: Int) {
+    val shape = RoundedCornerShape(50)
+    Row(
+        Modifier
+            .padding(top = 4.dp)
+            .clip(shape)
+            .background(Color(0x660B0720))
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for (i in 0 until total) {
+            val alive = i < left
+            Canvas(Modifier.size(12.dp)) {
+                drawCircle(if (alive) Color(0xFFF43F5E) else Color(0x55FFFFFF), size.minDimension / 2.4f)
+                if (!alive) {
+                    drawLine(Color.White, Offset(size.width * 0.15f, size.height * 0.15f), Offset(size.width * 0.85f, size.height * 0.85f), 2.dp.toPx(), StrokeCap.Round)
+                }
+            }
+            Spacer(Modifier.width(3.dp))
+        }
+        Spacer(Modifier.width(4.dp))
+        Text(stringResource(R.string.enemies_left, left, total), style = Styles.plain(13, Color(0xFFFCA5A5), FontWeight.Black))
+    }
+}
+
+@Composable
+private fun VersusOverlay(host: GameHost, ads: AdsManager, sound: SoundManager, onHome: () -> Unit) {
+    Delayed(600) {
+        LaunchedEffect(Unit) { sound.play(Sfx.COIN) }
+        DimOverlay {
+            GlassPanel {
+                Text(stringResource(R.string.player_wins, host.versusWinner), style = Styles.gradient(32), textAlign = TextAlign.Center)
+                if (host.game.recorder.clip() != null) ReplayView(host)
+                PrimaryButton(stringResource(R.string.rematch)) {
+                    sound.play(Sfx.WHOOSH)
+                    ads.onNewGame { host.retry() }
+                }
+                LinkText(stringResource(R.string.home), onClick = onHome)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TargetsOverlay(host: GameHost, ads: AdsManager, sound: SoundManager, onHome: () -> Unit) {
+    Delayed(500) {
+        LaunchedEffect(Unit) { sound.play(Sfx.COIN) }
+        DimOverlay {
+            GlassPanel {
+                Text(stringResource(R.string.mode_targets), style = Styles.gradient(30), textAlign = TextAlign.Center)
+                WinStars(host.stars, sound)
+                Text(stringResource(R.string.points_x, host.targetScore), style = Styles.glow(40, Color.White, FontWeight.Black))
+                if (host.newBest) NewBestBadge() else Text(stringResource(R.string.best_x, Progress.targetBest), style = Styles.plain(16, Palette.TextSecondary, FontWeight.Bold))
+                CountUpCoins(host.lastReward)
+                PrimaryButton(stringResource(R.string.try_again)) {
+                    sound.play(Sfx.WHOOSH)
+                    ads.onNewGame { host.retry() }
+                }
+                LinkText(stringResource(R.string.home), onClick = onHome)
+            }
         }
     }
 }

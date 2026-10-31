@@ -54,6 +54,18 @@ sem outras redes, sem assinatura, sem compras no app.
   apertados) e empurrão para trás (`knockFor`, menor no jogador). Quem passa da beirada de uma plataforma alta cai e
   morre (`checkFalls`, evento `Fell`, título "DESPENCOU!").
 - Câmera do golpe final: segue a flecha até o impacto e acaba `KILL_CAM_AFTER` (1,3 s) depois, sempre no corpo.
+- Vários inimigos (`LevelSpec.foes`, `Duel.foes`, `Foe`): fases com 2–5 arqueiros em torres de alturas e distâncias
+  diferentes (`Levels.foeCount`: fase com final 4 = grupo grande, final 2/0 = 2–3, às vezes 2 nas outras). Inimigos
+  atiram em rodízio (`activeFoe`); vence quem derrubar todos. Vida do grupo menor (`groupHp`, `GROUP_DAMAGE` 0,6).
+- Obstáculos (`ObstacleKind`, `ObstacleSpec`): escudo de madeira (quebra), muro de pedra, placa de metal (ricochete,
+  título "TABELA!"), barril explosivo (fere quem estiver perto, dos dois lados), caixote (moedas), alvo (modo treino).
+  A IA vê o obstáculo no caminho (`blocked()`) e atira por cima (`minAngle`).
+- Plataformas móveis (`Platform.lift` elevador a partir da fase 20; barcos `Platform.boat` sobre a água).
+- Modos (`GameMode`): DUEL, VERSUS (2 jogadores no mesmo celular, `playVersus`; o 2º puxa espelhado) e TARGETS
+  (tiro ao alvo, `PRACTICE_ARROWS` 8 flechas, recorde `Progress.targetBest`).
+- Talentos (`data/Progress.kt` → `Talents`: vida, guia, escudo inicial, moedas) e danças de vitória (`Dances`,
+  `Ragdoll.cheerStyle`), comprados com moedas no diálogo "Arqueiro" (`ui/ArcherDialog.kt`).
+- Efeitos de impacto: moedas saltando, hit-stop (`freezeUntil`), zoom (`punch`), flash vermelho ao ser atingido (`hurtFlash`).
 - Sobrevivência (`GameHost.playEndless`): um inimigo atrás do outro (`survivalSpec(k)`), +25 de vida entre eles;
   recorde em `Progress.bestEndless` (inimigos derrotados).
 

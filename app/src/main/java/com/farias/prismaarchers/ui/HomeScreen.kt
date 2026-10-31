@@ -39,6 +39,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -97,6 +98,8 @@ fun HomeScreen(
     onStats: () -> Unit,
     onMap: () -> Unit,
     onEndless: () -> Unit,
+    onVersus: () -> Unit = {},
+    onTargets: () -> Unit = {},
 ) {
     val context = LocalContext.current
     var showSettings by remember { mutableStateOf(false) }
@@ -104,12 +107,14 @@ fun HomeScreen(
     var showChest by remember { mutableStateOf(false) }
     var showRoulette by remember { mutableStateOf(false) }
     var showAchievements by remember { mutableStateOf(false) }
+    var showArcher by remember { mutableStateOf(false) }
 
     var backPressedAt by remember { mutableLongStateOf(0L) }
     var showExitHint by remember { mutableStateOf(false) }
     BackHandler {
         when {
-            showSettings || showMissions || showChest || showRoulette || showAchievements -> {
+            showSettings || showMissions || showChest || showRoulette || showAchievements || showArcher -> {
+                showArcher = false
                 showSettings = false
                 showMissions = false
                 showChest = false
@@ -250,6 +255,18 @@ fun HomeScreen(
                         TrophyIcon(Modifier.size(26.dp))
                     }
                 }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    HomeTile(stringResource(R.string.mode_versus), Modifier.weight(1f), 0, { sound.play(Sfx.WHOOSH, 0.7f); onVersus() }, height = 64.dp) {
+                        Text("VS", style = Styles.glow(20, Color(0xFFF43F5E), FontWeight.Black))
+                    }
+                    HomeTile(stringResource(R.string.mode_targets), Modifier.weight(1f), 0, { sound.play(Sfx.WHOOSH, 0.7f); onTargets() }, height = 64.dp) {
+                        TargetIcon(Modifier.size(24.dp))
+                    }
+                    HomeTile(stringResource(R.string.archer), Modifier.weight(1f), 0, { showArcher = true }, height = 64.dp) {
+                        Icon(Icons.Default.Person, contentDescription = null, tint = Color(0xFF34D399), modifier = Modifier.size(24.dp))
+                    }
+                }
             }
             Spacer(Modifier.height(12.dp))
             BannerAd(ads)
@@ -260,6 +277,7 @@ fun HomeScreen(
         if (showChest) ChestDialog(ads, sound) { showChest = false }
         if (showRoulette) RouletteDialog(ads, sound) { showRoulette = false }
         if (showAchievements) AchievementsDialog(sound) { showAchievements = false }
+        if (showArcher) ArcherDialog(sound) { showArcher = false }
 
         AnimatedVisibility(
             visible = showExitHint,
@@ -489,5 +507,17 @@ private fun WheelIcon(modifier: Modifier) {
         for (i in cols.indices) drawArc(cols[i], i * 60f, 60f, true, Offset(c.x - r, c.y - r), Size(r * 2, r * 2))
         drawCircle(Color.White, r * 0.18f, c)
         drawCircle(Color.White, r, c, style = androidx.compose.ui.graphics.drawscope.Stroke(r * 0.1f))
+    }
+}
+
+@Composable
+private fun TargetIcon(modifier: Modifier) {
+    androidx.compose.foundation.Canvas(modifier) {
+        val r = size.minDimension / 2f
+        drawCircle(Color(0xFFF8FAFC), r)
+        drawCircle(Color(0xFFDC2626), r * 0.78f)
+        drawCircle(Color(0xFFF8FAFC), r * 0.56f)
+        drawCircle(Color(0xFFDC2626), r * 0.36f)
+        drawCircle(Color(0xFFFACC15), r * 0.16f)
     }
 }

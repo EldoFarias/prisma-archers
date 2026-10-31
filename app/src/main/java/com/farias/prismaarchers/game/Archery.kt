@@ -20,7 +20,9 @@ import kotlin.random.Random
 const val GRAVITY = 9.8f
 
 /** A platform the archers stand on: from [x0] to [x1], top at [top], [depth] tall. */
-class Platform(val x0: Float, val x1: Float, val top: Float, val depth: Float = 30f) {
+class Platform(val x0: Float, val x1: Float, var top: Float, val depth: Float = 30f, val lift: Float = 0f, val boat: Boolean = false) {
+    /** Resting height (elevators and boats move around it). */
+    val baseTop = top
     fun contains(x: Float, y: Float) = x in x0..x1 && y <= top && y >= top - depth
 }
 
@@ -34,7 +36,8 @@ enum class Part(val damage: Int) { HEAD(100), TORSO(34), ARM(18), LEG(22) }
  */
 class Ragdoll(var rootX: Float, var rootY: Float, val facing: Float) {
     /** Where it stood at the start (a revive puts it back there). */
-    val homeX = rootX
+    var homeX = rootX
+        private set
     /** Knockback: the feet slide towards this x. */
     var rootTargetX = rootX
     /** Pain 1 → 0 after a hit that didn't kill: leans back, drops the bow, clutches the wound. */
@@ -82,6 +85,8 @@ class Ragdoll(var rootX: Float, var rootY: Float, val facing: Float) {
     var recoil = 0f
     /** The winner raises the bow. */
     var cheer = false
+    /** How the winner celebrates (0 jump, 1 dance, 2 flex, 3 bow). */
+    var cheerStyle = 0
     /** Strongest landing impact since last read (for dust); [thudX]/[thudY] where. */
     var thud = 0f
     var thudX = 0f
@@ -111,7 +116,7 @@ class Ragdoll(var rootX: Float, var rootY: Float, val facing: Float) {
         val breathe = sin(time * 2.3f) * 0.014f
         val sway = sin(time * 0.9f) * 0.012f
         val crouch = 0.05f * draw
-        val hop = if (cheer) abs(sin(time * 7f)) * 0.12f else 0f
+        val hop = if (cheer && cheerStyle == 0) abs(sin(time * 7f)) * 0.12f else 0f
         // Pain: an eased curve that peaks right after the hit; the upper body bends back, knees buckle.
         val hp = if (hurt > 0f) easeHurt(hurt) else 0f
         val lean = -0.22f * hp
@@ -122,11 +127,41 @@ class Ragdoll(var rootX: Float, var rootY: Float, val facing: Float) {
         set(CHEST, 0.02f + sway - 0.03f * draw + lean * 0.6f, 1.24f + breathe - crouch + hop - buckle)
         set(NECK, 0.03f + sway - 0.03f * draw + lean, 1.52f + breathe - crouch + hop - buckle * 1.1f)
         if (cheer) {
-            // Victory: bow raised high, other fist pumping.
-            val pump = sin(time * 7f) * 0.08f
-            set(HEAD, 0.04f + sway, 1.75f + breathe + hop)
-            set(R_ELBOW, 0.18f, 1.78f + hop); set(R_HAND, 0.24f, 2.1f + hop)
-            set(L_ELBOW, -0.2f, 1.72f + hop + pump); set(L_HAND, -0.26f, 2.0f + hop + pump * 1.5f)
+            when (cheerStyle) {
+                1 -> {
+                    // Dance: hips swing, arms wave in turn.
+                    val sw = sin(time * 6f) * 0.12f
+                    val wv = sin(time * 6f)
+                    set(PELVIS, sw, 0.88f); set(CHEST, sw * 0.4f, 1.22f); set(NECK, 0f, 1.5f)
+                    set(HEAD, sw * -0.3f, 1.72f)
+                    set(R_ELBOW, 0.25f, 1.55f + wv * 0.15f); set(R_HAND, 0.3f, 1.85f + wv * 0.25f)
+                    set(L_ELBOW, -0.25f, 1.55f - wv * 0.15f); set(L_HAND, -0.3f, 1.85f - wv * 0.25f)
+                    set(L_KNEE, -0.1f + sw, 0.45f); set(R_KNEE, 0.15f + sw, 0.45f)
+                }
+                2 -> {
+                    // Flex: both arms up, showing the muscles.
+                    val b = abs(sin(time * 4f)) * 0.05f
+                    set(HEAD, 0.04f, 1.75f + b)
+                    set(R_ELBOW, 0.35f, 1.5f + b); set(R_HAND, 0.33f, 1.82f + b)
+                    set(L_ELBOW, -0.33f, 1.5f + b); set(L_HAND, -0.3f, 1.82f + b)
+                }
+                3 -> {
+                    // A polite bow, then up again.
+                    val bend = (sin(time * 2.2f) * 0.5f + 0.5f)
+                    set(CHEST, 0.02f + 0.18f * bend, 1.22f - 0.08f * bend)
+                    set(NECK, 0.03f + 0.38f * bend, 1.48f - 0.22f * bend)
+                    set(HEAD, 0.05f + 0.55f * bend, 1.68f - 0.35f * bend)
+                    set(R_ELBOW, 0.12f + 0.2f * bend, 1.2f); set(R_HAND, 0.2f + 0.25f * bend, 1.0f)
+                    set(L_ELBOW, -0.12f, 1.2f); set(L_HAND, -0.1f, 0.95f)
+                }
+                else -> {
+                    // Victory: bow raised high, other fist pumping.
+                    val pump = sin(time * 7f) * 0.08f
+                    set(HEAD, 0.04f + sway, 1.75f + breathe + hop)
+                    set(R_ELBOW, 0.18f, 1.78f + hop); set(R_HAND, 0.24f, 2.1f + hop)
+                    set(L_ELBOW, -0.2f, 1.72f + hop + pump); set(L_HAND, -0.26f, 2.0f + hop + pump * 1.5f)
+                }
+            }
             return
         }
         // Hurt: the bow arm drops away from the aim.
@@ -185,6 +220,15 @@ class Ragdoll(var rootX: Float, var rootY: Float, val facing: Float) {
         impulse(at, vx, vy)
         // A little spin so every fall looks different.
         impulse(PELVIS, vx * 0.3f, vy * 0.3f)
+    }
+
+    /** Puts a standing archer at a new spot instantly (before the duel starts). */
+    fun placeAt(x: Float, y: Float) {
+        rootX = x; rootY = y
+        rootTargetX = x
+        homeX = x
+        buildPose()
+        for (i in 0 until N) { this.x[i] = poseX[i]; this.y[i] = poseY[i]; px[i] = this.x[i]; py[i] = this.y[i] }
     }
 
     /** Back on its feet at the root (rewarded "continue"). */
@@ -388,31 +432,92 @@ class Arrow(var x: Float, var y: Float, var vx: Float, var vy: Float, val byPlay
     var stuckTime = -1f
     /** Went through the target (or bounced off a shield): ignores bodies from now on. */
     var pierced = false
+    /** Went through this enemy (index): ignores it, can still hit others behind. */
+    var passed = -1
+    /** Bounced off metal on the way (bank shot). */
+    var ricochet = false
+    /** Stuck in this platform or obstacle's platform (moves with it), -1 = none. */
+    var stuckPlatform = -1
 }
 
-/** Something that happened, for sounds, effects and the UI. */
+/** Something that happened, for sounds, effects and the UI. [foe] = which enemy (index in [Duel.foes]). */
 sealed class DuelEvent {
     data class Shot(val byPlayer: Boolean, val kind: Int = 0) : DuelEvent()
+    /** [kill] = that archer died; [final] = it decided the duel. */
     data class Hit(
         val byPlayer: Boolean, val part: Part, val damage: Int, val x: Float, val y: Float, val kill: Boolean,
-        val kind: Int = 0, val pierce: Boolean = false,
+        val kind: Int = 0, val pierce: Boolean = false, val foe: Int = 0, val final: Boolean = kill, val ricochet: Boolean = false,
     ) : DuelEvent()
     data class Miss(val byPlayer: Boolean, val x: Float, val y: Float, val ground: Boolean) : DuelEvent()
-    data class TurnStart(val player: Boolean) : DuelEvent()
+    data class TurnStart(val player: Boolean, val foe: Int = 0) : DuelEvent()
     data class Over(val playerWon: Boolean) : DuelEvent()
-    data class Explode(val byPlayer: Boolean, val x: Float, val y: Float, val damage: Int, val kill: Boolean) : DuelEvent()
-    data class HelmetOff(val x: Float, val y: Float, val vx: Float, val vy: Float) : DuelEvent()
-    data class ShieldHit(val x: Float, val y: Float, val left: Int) : DuelEvent()
-    data class Frozen(val x: Float, val y: Float) : DuelEvent()
-    data class Thaw(val x: Float, val y: Float) : DuelEvent()
-    data class Heal(val amount: Int, val x: Float, val y: Float) : DuelEvent()
-    /** Shoved off the edge of a high platform: the fall kills ([enemy] = the enemy fell). */
-    data class Fell(val enemy: Boolean, val x: Float, val y: Float) : DuelEvent()
+    data class Explode(val byPlayer: Boolean, val x: Float, val y: Float, val damage: Int, val kill: Boolean, val kills: Int = if (kill) 1 else 0, val final: Boolean = kill, val barrel: Boolean = false) : DuelEvent()
+    data class HelmetOff(val x: Float, val y: Float, val vx: Float, val vy: Float, val foe: Int = 0) : DuelEvent()
+    data class ShieldHit(val x: Float, val y: Float, val left: Int, val foe: Int = 0) : DuelEvent()
+    data class Frozen(val x: Float, val y: Float, val foe: Int = 0) : DuelEvent()
+    data class Thaw(val x: Float, val y: Float, val foe: Int = 0) : DuelEvent()
+    data class Heal(val amount: Int, val x: Float, val y: Float, val foe: Int = 0) : DuelEvent()
+    /** Shoved off the edge of a high platform: the fall kills ([enemy] = an enemy fell). */
+    data class Fell(val enemy: Boolean, val x: Float, val y: Float, val foe: Int = 0, val final: Boolean = true) : DuelEvent()
     /** Scenery bonus hit (0 bird, 1 balloon), from [ArcheryGame]. */
     data class Bonus(val kind: Int, val x: Float, val y: Float) : DuelEvent()
+    /** An arrow hit an obstacle (wood shield, wall, crate…); [broken] when it broke. */
+    data class ObstacleHit(val kind: Int, val x: Float, val y: Float, val broken: Boolean, val byPlayer: Boolean) : DuelEvent()
+    data class Ricochet(val x: Float, val y: Float) : DuelEvent()
+    /** Target practice: [points] for how close to the centre (10 = bullseye). */
+    data class TargetHit(val points: Int, val x: Float, val y: Float) : DuelEvent()
 }
 
-/** One duel (a level): two platforms, two archers, wind, whose turn it is. */
+/** Kinds of obstacle in the field. */
+object ObstacleKind {
+    /** Wooden shield in front of an enemy: arrows stick, breaks after a few hits. */
+    const val WOOD = 0
+    /** Stone wall between the archers: arrows stick, never breaks. */
+    const val WALL = 1
+    /** Metal sign: arrows bounce off it (bank shots). */
+    const val METAL = 2
+    /** Explosive barrel next to an enemy. */
+    const val BARREL = 3
+    /** Wooden crate: breaks and drops coins. */
+    const val CRATE = 4
+    /** Target practice board (round). */
+    const val TARGET = 5
+}
+
+/** An obstacle: a box from (x0, y0) to (x1, y1). Attached to a platform it moves with it. */
+class Obstacle(val kind: Int, var x0: Float, var y0: Float, var x1: Float, var y1: Float, var hp: Int, val platform: Int = -1) {
+    var alive = true
+    /** Offsets from the platform top (for obstacles riding a moving platform). */
+    var relY0 = 0f
+    var relY1 = 0f
+    var hitAt = -10f
+    val cx get() = (x0 + x1) / 2f
+    val cy get() = (y0 + y1) / 2f
+}
+
+/** How an obstacle is placed by the level: [anchor] -1 = stands on the ground, -2 = floats at [y], ≥0 = on that enemy's platform. */
+class ObstacleSpec(val kind: Int, val x: Float, val w: Float, val h: Float, val anchor: Int, val y: Float = 0f, val hp: Int = 1)
+
+/** One enemy of a level. [h] = height of its platform above the ground; [x] = where it stands. */
+class FoeSpec(
+    val x: Float,
+    val h: Float,
+    val hp: Int,
+    val skill: Float,
+    val helmet: Boolean,
+    val power: Int,
+    val boss: Boolean,
+    /** Elevator: the platform goes up and down this many meters (0 = still). */
+    val lift: Float = 0f,
+)
+
+object GameMode {
+    const val DUEL = 0
+    const val VERSUS = 1
+    const val TARGETS = 2
+}
+
+/** One level: the player's spot, the enemies, obstacles and wind. Legacy fields describe the first enemy. */
 class LevelSpec(
     val number: Int,
     val distance: Float,
@@ -424,9 +529,12 @@ class LevelSpec(
     val boss: Boolean,
     val seed: Long,
     val power: Int = BossPower.NONE,
-    /** Height of the player's and the enemy's platform above the ground (0 = standing on the ground). */
+    /** Height of the player's and the (first) enemy's platform above the ground (0 = standing on the ground). */
     val playerH: Float = 9f,
     val enemyH: Float = 9f,
+    val foes: List<FoeSpec> = listOf(FoeSpec(distance, enemyH, enemyHp, enemySkill, enemyHelmet, power, boss)),
+    val obstacles: List<ObstacleSpec> = emptyList(),
+    val mode: Int = GameMode.DUEL,
 )
 
 object Levels {
@@ -442,13 +550,23 @@ object Levels {
         else -> BossPower.HEAL
     }
 
+    /** How many enemies level [n] has: duels alternate with squads (2–3) and hordes (4–5). */
+    fun foeCount(n: Int, rnd: Random): Int = when {
+        n <= 3 -> 1
+        isBoss(n) -> if (n >= 30) 3 else 1
+        n % 5 == 4 -> if (n < 14) 3 else 4 + rnd.nextInt(2)
+        n % 5 == 2 -> if (n < 10) 2 else 2 + rnd.nextInt(2)
+        n % 5 == 0 -> if (n < 10) 2 else 3
+        else -> if (n >= 8 && rnd.nextFloat() < 0.35f) 2 else 1
+    }
+
     fun level(n: Int, salt: Long = 0L): LevelSpec {
         val rnd = Random(n * 7_919L + 31 + salt)
         val d = ((n - 1) / 80f).coerceIn(0f, 1f)
         val boss = isBoss(n)
         val power = bossPower(n)
         val distance = 13f + 14f * d + rnd.nextFloat() * (4f + 6f * d)
-        rnd.nextFloat() // (kept so the rest of the level stays the same)
+        rnd.nextFloat()
         val wind = if (n < WIND_FROM) 0f else (rnd.nextFloat() * 2f - 1f) * (0.6f + 3.2f * d)
         var hp = if (boss) 150 + n else 100 + (n / 5) * 5
         if (power == BossPower.SHIELD || power == BossPower.HEAL) hp -= 30 else if (boss) hp -= 25
@@ -463,7 +581,6 @@ object Levels {
         when {
             n <= 3 -> { playerH = 7f + rnd.nextFloat() * 2f; enemyH = playerH + (rnd.nextFloat() * 2f - 1f) * 0.8f }
             layout < 0.45f -> {
-                // Towers of clearly different heights: one of them up high.
                 playerH = 3f + rnd.nextFloat() * 13f
                 val sign = if (rnd.nextBoolean()) 1f else -1f
                 enemyH = (playerH + sign * (0.4f + 0.6f * rnd.nextFloat()) * maxDiff).coerceIn(2f, 22f)
@@ -472,30 +589,114 @@ object Levels {
             layout < 0.85f -> { enemyH = 0f; playerH = min(5f + rnd.nextFloat() * 15f, maxDiff) }
             else -> { playerH = 0f; enemyH = rnd.nextFloat() * min(3f, maxDiff) }
         }
-        return LevelSpec(n, distance, enemyH - playerH, wind, hp, helmet, skill, boss, n * 131L + salt, power, playerH, enemyH)
+        // Enemies: the first one as above; the others spread further out, at all sorts of heights.
+        val count = foeCount(n, rnd)
+        val foes = ArrayList<FoeSpec>()
+        foes.add(FoeSpec(distance, enemyH, if (count > 1 && !boss) groupHp(n, count) else hp, skill, helmet, power, boss, lift(n, rnd)))
+        var x = distance
+        // Gaps between enemies, squeezed so the farthest stays within bow range (~55 m, wind included).
+        val gaps = FloatArray(count) { if (it == 0) 0f else 5.5f + rnd.nextFloat() * (3.5f + 3f * d) }
+        val span = gaps.sum()
+        val room = (Duel.MAX_FOE_X - abs(wind) * 2.5f - distance).coerceAtLeast(5f * (count - 1))
+        val squeeze = if (span > room) room / span else 1f
+        for (i in 1 until count) {
+            x += gaps[i] * squeeze
+            val h = when {
+                rnd.nextFloat() < 0.22f -> 0f
+                else -> (playerH + (rnd.nextFloat() * 2f - 1f) * maxDiff).coerceIn(1.5f, 22f)
+            }
+            val minion = boss
+            foes.add(FoeSpec(x, h, if (minion) 45 + n / 3 else groupHp(n, count), skill * (if (minion) 0.6f else 0.7f), n >= 25 && rnd.nextFloat() < 0.2f, BossPower.NONE, false, lift(n, rnd)))
+        }
+        // Obstacles: wooden shields, explosive barrels, crates, walls and metal signs in between.
+        val obs = ArrayList<ObstacleSpec>()
+        for ((i, f) in foes.withIndex()) {
+            if (n >= 8 && rnd.nextFloat() < 0.3f) obs.add(ObstacleSpec(ObstacleKind.WOOD, f.x - 0.85f, 0.2f, 1.3f, i, hp = 3))
+            if (n >= 6 && rnd.nextFloat() < 0.35f) obs.add(ObstacleSpec(ObstacleKind.BARREL, f.x + 1.0f, 0.6f, 0.85f, i))
+            else if (n >= 4 && rnd.nextFloat() < 0.3f) obs.add(ObstacleSpec(ObstacleKind.CRATE, f.x + 1.1f, 0.75f, 0.75f, i))
+        }
+        if (n >= 12 && rnd.nextFloat() < 0.3f) {
+            val wx = distance * (0.4f + rnd.nextFloat() * 0.2f)
+            val top = max(playerH, enemyH) + 1.0f + rnd.nextFloat() * 2.5f
+            obs.add(ObstacleSpec(ObstacleKind.WALL, wx, 1.2f, top, -1))
+        } else if (n >= 15 && rnd.nextFloat() < 0.3f) {
+            val wx = distance * (0.35f + rnd.nextFloat() * 0.3f)
+            val y = (max(0f, enemyH - playerH)) + 4f + rnd.nextFloat() * 4f
+            obs.add(ObstacleSpec(ObstacleKind.METAL, wx, 2.2f, 0.3f, -2, y))
+        }
+        return LevelSpec(n, distance, enemyH - playerH, wind, foes[0].hp, helmet, skill, boss, n * 131L + salt, power, playerH, enemyH, foes, obs)
     }
 
+    /** Group enemies are frailer: a horde's archer falls to one or two good hits. */
+    private fun groupHp(n: Int, count: Int): Int =
+        if (count >= 4) (28 + n * 0.3f).toInt().coerceAtMost(58) else (42 + n * 0.45f).toInt().coerceAtMost(82)
+
+    /** From level 20 some platforms are elevators. */
+    private fun lift(n: Int, rnd: Random): Float = if (n >= 20 && rnd.nextFloat() < 0.25f) 1.5f + rnd.nextFloat() * 2f else 0f
+
     fun daily(day: Int): LevelSpec = level(30 + day % 40, salt = day * 2_654_435_761L)
+
+    /** Two players on one phone: a single duel, no AI. */
+    fun versus(seed: Long): LevelSpec {
+        val base = level(12 + (seed % 30).toInt().let { if (it < 0) -it else it }, salt = seed)
+        val f = base.foes[0]
+        return LevelSpec(base.number, base.distance, base.heightDiff, base.wind * 0.6f, 100, false, 0f, false, base.seed, BossPower.NONE,
+            base.playerH, f.h, listOf(FoeSpec(f.x, f.h, 100, 0f, false, BossPower.NONE, false)), base.obstacles.filter { it.anchor < 0 }, GameMode.VERSUS)
+    }
+
+    /** Target practice: boards at different distances and heights, no enemies. */
+    fun targets(seed: Long): LevelSpec {
+        val rnd = Random(seed)
+        val obs = ArrayList<ObstacleSpec>()
+        var x = 10f
+        repeat(6) {
+            x += 3f + rnd.nextFloat() * 5f
+            val y = -2f + rnd.nextFloat() * 9f
+            obs.add(ObstacleSpec(ObstacleKind.TARGET, x, 1.1f, 1.1f, -2, y))
+        }
+        obs.add(ObstacleSpec(ObstacleKind.CRATE, 12f + rnd.nextFloat() * 12f, 0.75f, 0.75f, -1))
+        val wind = (rnd.nextFloat() * 2f - 1f) * 1.5f
+        return LevelSpec(1, 20f, 0f, wind, 1, false, 0f, false, seed, BossPower.NONE, 6f, 6f, emptyList(), obs, GameMode.TARGETS)
+    }
+}
+
+/** One enemy archer in a duel. */
+class Foe(val index: Int, val spec: FoeSpec, val body: Ragdoll, val platform: Int) {
+    var hp = spec.hp
+    val maxHp = spec.hp
+    var helmetOn = spec.helmet
+    /** Hits the knight boss's bubble can still take. */
+    var shield = if (spec.power == BossPower.SHIELD) 2 else 0
+    /** Hit by an ice arrow: skips its next turn. */
+    var frozen = false
+    var shots = 0
+    var plan: Pair<Float, Float> = 0.3f to 0.7f
+    /** Standing on a boat (bobs on the water). */
+    var boat = false
+    val alive: Boolean get() = body.alive && hp > 0
 }
 
 /**
  * The duel simulation: turns, arrows, hits and the enemy AI. The UI feeds aim/release for the
- * player; [step] advances everything. Several arrows can fly at once (triple shot, double-shooting boss):
- * the turn passes when all of them have landed.
+ * player; [step] advances everything. There can be several enemies: they take turns shooting (one per
+ * round). Several arrows can fly at once (triple shot, double-shooting boss): the turn passes when all of
+ * them have landed.
  */
 class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nanoTime()) {
     enum class Turn { PLAYER, PLAYER_ARROW, ENEMY, ENEMY_ARROW, OVER }
 
     var platforms: List<Platform>
         private set
-    /** Height of the ground below the two towers. */
+    /** Height of the ground below the towers. */
     var groundY: Float
         private set
     val player: Ragdoll
-    val enemy: Ragdoll
-    var enemyHp = spec.enemyHp
-    val maxEnemyHp = spec.enemyHp
-    var maxPlayerHp = 100
+    val foes: List<Foe>
+    val obstacles = ArrayList<Obstacle>()
+    /** The enemy shooting now (or the one the camera should show). */
+    var activeFoe = 0
+        private set
+    var maxPlayerHp = playerHp
     var turn = Turn.PLAYER
         private set
     val arrows = ArrayList<Arrow>()
@@ -507,9 +708,7 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
         private set
     var playerWon = false
         private set
-    /** Seconds the enemy has been "thinking". */
     private var enemyWait = 0f
-    private var enemyShots = 0
     private val rnd = Random(seed)
     var shotsFired = 0
         private set
@@ -519,20 +718,36 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
     var finished = false
         private set
     private var overTime = 0f
-    /** The enemy still wears the helmet (it flies off at the first head hit). */
-    var helmetOn = spec.enemyHelmet
-        private set
-    /** Hits the knight boss's bubble can still take. */
-    var bossShield = if (spec.power == BossPower.SHIELD) 2 else 0
-        private set
-    /** Hit by an ice arrow: skips the next turn. */
-    var enemyFrozen = false
-        private set
     private var killed = false
     private var killByPlayer = false
+    /** Two humans: the enemy side waits for [releaseEnemy] instead of the AI. */
+    val versus = spec.mode == GameMode.VERSUS
+    val practice = spec.mode == GameMode.TARGETS
+    /** The last enemy that died (for the camera). */
+    var lastFallen = -1
+        private set
+
+    // Legacy single-enemy view: the active enemy.
+    val enemy: Ragdoll get() = focus().body
+    val enemyHp: Int get() = focus().hp
+    val maxEnemyHp: Int get() = focus().maxHp
+    val helmetOn: Boolean get() = focus().helmetOn
+    val bossShield: Int get() = focus().shield
+    val enemyFrozen: Boolean get() = focus().frozen
+    val aliveFoes: Int get() = foes.count { it.alive }
+
+    /** The enemy to show: the active one if alive, else the last that fell, else any. */
+    fun focus(): Foe {
+        if (foes.isEmpty()) return DUMMY
+        val a = foes[activeFoe.coerceIn(0, foes.size - 1)]
+        if (a.alive) return a
+        if (lastFallen >= 0) return foes[lastFallen]
+        return foes.firstOrNull { it.alive } ?: a
+    }
+
     /**
      * Water or lava below: arrows and bodies go through the ground and sink. An archer "on the ground" then
-     * stands on a low rock ([LOW_ROCK] above the surface). Set right after creating the duel.
+     * stands on a low rock ([LOW_ROCK] above the surface), or an enemy on a boat. Set right after creating the duel.
      */
     var liquid = false
         set(v) {
@@ -540,45 +755,79 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
             buildGround()
         }
     private lateinit var towers: List<Platform>
-    private val pX0: Float
-    private val pX1: Float
-    private val eX0: Float
-    private val eX1: Float
+    private val px0: Float
+    private val px1: Float
+    private val fx0: FloatArray
+    private val fx1: FloatArray
 
     init {
-        val ex = spec.distance
-        val ey = spec.heightDiff
-        // Platform widths vary a little from duel to duel.
         val wr = Random(spec.seed * 31 + 7)
-        pX0 = -(2.2f + wr.nextFloat() * 1.8f)
-        pX1 = 0.9f + wr.nextFloat() * 0.6f
-        eX0 = ex - (0.9f + wr.nextFloat() * 0.6f)
-        eX1 = ex + 2.2f + wr.nextFloat() * 1.8f
+        px0 = -(2.2f + wr.nextFloat() * 1.8f)
+        px1 = 0.9f + wr.nextFloat() * 0.6f
+        fx0 = FloatArray(spec.foes.size)
+        fx1 = FloatArray(spec.foes.size)
+        val group = spec.foes.size > 1
+        for ((i, f) in spec.foes.withIndex()) {
+            fx0[i] = f.x - (0.9f + wr.nextFloat() * 0.6f)
+            fx1[i] = f.x + (if (group) 1.6f else 2.2f) + wr.nextFloat() * (if (group) 1.2f else 1.8f)
+        }
         groundY = -spec.playerH
         platforms = emptyList()
-        buildGround()
         player = Ragdoll(0f, 0f, 1f)
-        enemy = Ragdoll(ex, ey, -1f)
         player.aim = 0.3f
-        enemy.aim = 0.3f
+        foes = spec.foes.mapIndexed { i, f ->
+            Foe(i, f, Ragdoll(f.x, f.h - spec.playerH, -1f).also { it.aim = 0.3f }, i + 1)
+        }
+        buildGround()
+        if (versus) maxPlayerHp = 100
     }
 
-    /** The two archers' platforms and the ground under them (lower when it's water, see [liquid]). */
+    /** Platforms (player, each enemy, ground) and obstacles; the ground is lower over water (see [liquid]). */
     private fun buildGround() {
-        val ex = spec.distance
-        val ey = spec.heightDiff
-        val lowest = min(spec.playerH, spec.enemyH)
-        groundY = -spec.playerH - if (liquid) max(0f, LOW_ROCK - lowest) else 0f
-        platforms = listOf(
-            Platform(pX0, pX1, 0f),
-            Platform(eX0, eX1, ey),
-            // The ground (street, sea, sand…) below: arrows and fallen bodies end up there.
-            Platform(-80f, ex + 80f, groundY, 60f),
-        )
-        towers = platforms.subList(0, 2)
+        val minFoeH = spec.foes.minOfOrNull { it.h } ?: 99f
+        groundY = -spec.playerH - if (liquid && spec.playerH < LOW_ROCK) LOW_ROCK - spec.playerH else 0f
+        val list = ArrayList<Platform>()
+        list.add(Platform(px0, px1, 0f))
+        for ((i, f) in spec.foes.withIndex()) {
+            val foe = if (i < foes.size) foes[i] else null
+            var top = f.h - spec.playerH
+            val boat = liquid && f.h < LOW_ROCK
+            if (boat) top = groundY + BOAT_DECK
+            if (!liquid && f.h <= 0f) top = groundY
+            val p = Platform(fx0[i], fx1[i], top, lift = f.lift, boat = boat)
+            list.add(p)
+            if (foe != null) {
+                foe.boat = boat
+                if (foe.body.rootY != top) foe.body.placeAt(f.x, top)
+            }
+        }
+        list.add(Platform(-80f, (spec.foes.maxOfOrNull { it.x } ?: spec.distance) + 80f, groundY, 60f))
+        platforms = list
+        towers = list.subList(0, list.size - 1)
+        if (minFoeH < -1f) Unit
+        buildObstacles()
     }
 
-    // ------------------------------------------------------------------ player input
+    private fun buildObstacles() {
+        obstacles.clear()
+        for (o in spec.obstacles) {
+            val half = o.w / 2f
+            when {
+                o.anchor >= 0 && o.anchor < foes.size -> {
+                    val p = platforms[o.anchor + 1]
+                    // Keep it on the platform
+                    val cx = o.x.coerceIn(p.x0 + half, p.x1 - half)
+                    val ob = Obstacle(o.kind, cx - half, p.top, cx + half, p.top + o.h, o.hp, o.anchor + 1)
+                    ob.relY0 = 0f; ob.relY1 = o.h
+                    obstacles.add(ob)
+                }
+                o.anchor == -1 -> obstacles.add(Obstacle(o.kind, o.x - half, groundY, o.x + half, groundY + o.h - (if (o.kind == ObstacleKind.WALL) groundY + spec.playerH else 0f), o.hp))
+                else -> obstacles.add(Obstacle(o.kind, o.x - half, o.y - o.h / 2f, o.x + half, o.y + o.h / 2f, o.hp))
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ input
 
     /** Aim while dragging: [angle] radians (up positive, towards the enemy), [power] 0..1. */
     fun aimPlayer(angle: Float, power: Float) {
@@ -594,15 +843,39 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
             return false
         }
         player.aim = angle.coerceIn(-1.2f, 1.45f)
-        if (kind == ArrowKind.TRIPLE) {
-            for (k in -1..1) shoot(player, player.aim + k * 0.055f, power, true, kind, 0.6f, events, k == 0)
-        } else {
-            shoot(player, player.aim, power, true, kind, if (kind == ArrowKind.FIRE) 1.5f else if (kind == ArrowKind.ICE) 0.8f else 1f, events, true)
-        }
+        fire(player, player.aim, power, true, kind, events)
         player.draw = 0f
         shotsFired++
         turn = Turn.PLAYER_ARROW
         return true
+    }
+
+    /** Two-player mode: the second human aims the enemy (angle measured towards the player, up positive). */
+    fun aimEnemy(angle: Float, power: Float) {
+        if (!versus || turn != Turn.ENEMY) return
+        val f = focus()
+        f.body.aim = angle.coerceIn(-1.2f, 1.45f)
+        f.body.draw = power.coerceIn(0f, 1f)
+    }
+
+    fun releaseEnemy(angle: Float, power: Float, events: MutableList<DuelEvent>, kind: Int = 0): Boolean {
+        if (!versus || turn != Turn.ENEMY) return false
+        val f = focus()
+        if (power < 0.08f) { f.body.draw = 0f; return false }
+        f.body.aim = angle.coerceIn(-1.2f, 1.45f)
+        fire(f.body, f.body.aim, power, false, kind, events)
+        f.body.draw = 0f
+        f.shots++
+        turn = Turn.ENEMY_ARROW
+        return true
+    }
+
+    private fun fire(r: Ragdoll, aim: Float, power: Float, byPlayer: Boolean, kind: Int, events: MutableList<DuelEvent>) {
+        if (kind == ArrowKind.TRIPLE) {
+            for (k in -1..1) shoot(r, aim + k * 0.055f, power, byPlayer, kind, 0.6f, events, k == 0)
+        } else {
+            shoot(r, aim, power, byPlayer, kind, if (kind == ArrowKind.FIRE) 1.5f else if (kind == ArrowKind.ICE) 0.8f else 1f, events, true)
+        }
     }
 
     private fun shoot(r: Ragdoll, aim: Float, power: Float, byPlayer: Boolean, kind: Int, mul: Float, events: MutableList<DuelEvent>, announce: Boolean) {
@@ -611,8 +884,7 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
         val a = Arrow(r.bowX(), r.bowY(), cos(aim) * speed * dir, sin(aim) * speed, byPlayer, kind, mul)
         r.recoil = 1f
         arrows.add(a)
-        if (arrows.size > 28) {
-            // Drop the oldest arrow that isn't in the air.
+        if (arrows.size > 34) {
             val old = arrows.firstOrNull { !it.flying }
             if (old != null) arrows.remove(old)
         }
@@ -625,7 +897,7 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
         if (turn != Turn.OVER || playerWon) return
         playerHp = hp
         player.revive()
-        enemy.cheer = false
+        for (f in foes) f.body.cheer = false
         arrows.removeAll { it.stuckIn === player }
         inFlight.clear()
         killed = false
@@ -637,12 +909,15 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
 
     fun step(dt: Float, events: MutableList<DuelEvent>) {
         time += dt
+        movePlatforms()
         val solid = if (liquid) towers else platforms
         val wy = if (liquid) groundY else Float.NaN
         player.waterY = wy
-        enemy.waterY = wy
         player.step(dt, solid)
-        enemy.step(dt, solid)
+        for (f in foes) {
+            f.body.waterY = wy
+            f.body.step(dt, solid)
+        }
         checkFalls(events)
         var i = inFlight.size - 1
         while (i >= 0) {
@@ -650,26 +925,29 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
             i--
         }
         when (turn) {
-            Turn.ENEMY -> {
+            Turn.ENEMY -> if (!versus && foes.isNotEmpty()) {
+                val f = foes[activeFoe]
+                val e = f.body
                 enemyWait += dt
-                enemy.draw = (enemyWait / 0.9f).coerceIn(0f, 1f)
-                val (ang, pow) = enemyPlan
-                enemy.aim = enemy.aim + (ang - enemy.aim) * min(1f, dt * 4f)
+                e.draw = (enemyWait / 0.9f).coerceIn(0f, 1f)
+                val (ang, pow) = f.plan
+                e.aim = e.aim + (ang - e.aim) * min(1f, dt * 4f)
                 if (enemyWait > 1.1f) {
-                    if (spec.power == BossPower.DOUBLE) {
-                        shoot(enemy, ang - 0.03f, pow, false, 0, 0.6f, events, true)
-                        shoot(enemy, ang + 0.03f, pow, false, 0, 0.6f, events, false)
+                    if (f.spec.power == BossPower.DOUBLE) {
+                        shoot(e, ang - 0.03f, pow, false, 0, 0.6f, events, true)
+                        shoot(e, ang + 0.03f, pow, false, 0, 0.6f, events, false)
                     } else {
-                        shoot(enemy, ang, pow, false, 0, 1f, events, true)
+                        // In a group every archer hits softer (they take turns, so it adds up).
+                        shoot(e, ang, pow, false, 0, if (foes.size > 1 && !f.spec.boss) GROUP_DAMAGE else 1f, events, true)
                     }
-                    enemy.draw = 0f
-                    enemyShots++
+                    e.draw = 0f
+                    f.shots++
                     turn = Turn.ENEMY_ARROW
                 }
             }
             Turn.OVER -> {
                 overTime += dt
-                val loser = if (playerWon) enemy else player
+                val loser = if (playerWon) (if (lastFallen >= 0) foes[lastFallen].body else enemy) else player
                 // A body that fell into the water: let it splash and start sinking before the panel.
                 val done = if (liquid && loser.underwater > 0f) loser.underwater > 1.6f
                 else loser.settled(dt) || overTime > (if (liquid && loser.y[Ragdoll.PELVIS] > groundY) 3.5f else 2.2f)
@@ -680,7 +958,7 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
             }
             else -> Unit
         }
-        // Arrows stuck in bodies follow them.
+        // Arrows stuck in bodies follow them; arrows stuck in moving obstacles too.
         for (ar in arrows) {
             val body = ar.stuckIn ?: continue
             val b = Ragdoll.BONES[ar.bone]
@@ -694,15 +972,32 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
         }
     }
 
-    /** Damage an arrow does on [part] (before shields). */
-    fun damageFor(a: Arrow, part: Part): Int {
+    /** Elevators go up and down, boats bob; whoever stands there (and obstacles on them) follow. */
+    private fun movePlatforms() {
+        for ((q, p) in platforms.withIndex()) {
+            if (p.lift <= 0f && !p.boat) continue
+            val old = p.top
+            p.top = p.baseTop + if (p.boat) sin(time * 1.7f + q) * 0.12f else (sin(time * 0.9f + q * 1.7f) * 0.5f + 0.5f) * p.lift
+            val dy = p.top - old
+            if (dy == 0f) continue
+            val foe = foes.getOrNull(q - 1)
+            if (foe != null && foe.body.alive) foe.body.rootY = p.top
+            for (o in obstacles) if (o.platform == q) { o.y0 = p.top + o.relY0; o.y1 = p.top + o.relY1 }
+            for (a in arrows) if (!a.flying && a.stuckIn == null && a.stuckPlatform == q) a.y += dy
+        }
+    }
+
+    /** Damage an arrow does on [part] of [foe] (null = the player), before shields. */
+    fun damageFor(a: Arrow, part: Part, foe: Foe?): Int {
+        val helmet = foe?.helmetOn ?: false
         val base = when {
-            part == Part.HEAD && a.byPlayer && helmetOn -> 50
-            part == Part.HEAD && !a.byPlayer -> PLAYER_HEAD_DAMAGE
+            part == Part.HEAD && foe != null && helmet -> 50
+            part == Part.HEAD && foe == null -> PLAYER_HEAD_DAMAGE
             else -> part.damage
         }
-        // A clean headshot always kills, whatever the arrow.
-        if (part == Part.HEAD && a.byPlayer && !helmetOn) return 100
+        // A clean headshot always kills an enemy, whatever the arrow.
+        if (part == Part.HEAD && foe != null && !helmet && !versus) return 100
+        if (part == Part.HEAD && versus) return (60 * a.dmgMul).roundToInt()
         return (base * a.dmgMul).roundToInt()
     }
 
@@ -718,15 +1013,17 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
         val tipY = a.y + sin(a.angle) * 0.35f
         val oTipX = ox + cos(a.angle) * 0.35f
         val oTipY = oy + sin(a.angle) * 0.35f
-        val target = if (a.byPlayer) enemy else player
-        // The knight's bubble stops player arrows first.
-        if (a.byPlayer && bossShield > 0 && !a.pierced) {
-            val t = segCircle(oTipX, oTipY, tipX, tipY, enemy.x[Ragdoll.CHEST], enemy.y[Ragdoll.CHEST] + 0.1f, SHIELD_R)
-            if (t != null) {
-                bossShield--
+        // Obstacles first (they stand in front of the archers)
+        if (hitObstacles(a, oTipX, oTipY, tipX, tipY, events)) return
+        if (a.byPlayer) {
+            // The knight's bubble stops player arrows first.
+            for (f in foes) {
+                if (f.shield <= 0 || a.pierced || !f.alive) continue
+                val t = segCircle(oTipX, oTipY, tipX, tipY, f.body.x[Ragdoll.CHEST], f.body.y[Ragdoll.CHEST] + 0.1f, SHIELD_R) ?: continue
+                f.shield--
                 val hx = oTipX + (tipX - oTipX) * t
                 val hy = oTipY + (tipY - oTipY) * t
-                events.add(DuelEvent.ShieldHit(hx, hy, bossShield))
+                events.add(DuelEvent.ShieldHit(hx, hy, f.shield, f.index))
                 if (a.kind == ArrowKind.BOMB) {
                     events.add(DuelEvent.Explode(true, hx, hy, 0, false))
                     a.flying = false
@@ -734,63 +1031,35 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
                     land(a, events)
                     return
                 }
-                // Bounce back and fall.
                 a.pierced = true
                 a.vx = -a.vx * 0.25f
                 a.vy = 2.5f
                 return
             }
-        }
-        // Body hit
-        val hit = if (!a.pierced && (target.alive || a.age < 6f)) target.hitTest(oTipX, oTipY, tipX, tipY) else null
-        if (hit != null) {
-            val (bone, t) = hit
-            val hx = oTipX + (tipX - oTipX) * t
-            val hy = oTipY + (tipY - oTipY) * t
-            val part = Ragdoll.BONE_PART[bone]
-            val wasAlive = target.alive
-            var dmg = if (wasAlive) damageFor(a, part) else 0
-            if (!a.byPlayer && shields > 0 && dmg > 0) {
-                shields--
-                dmg = 0
+            // The closest enemy body along the segment
+            var best: Foe? = null
+            var bestHit: Pair<Int, Float>? = null
+            if (!a.pierced) for (f in foes) {
+                if (!f.body.alive && a.age > 6f) continue
+                if (a.passed == f.index) continue
+                val h = f.body.hitTest(oTipX, oTipY, tipX, tipY) ?: continue
+                if (bestHit == null || h.second < bestHit.second) { bestHit = h; best = f }
             }
-            if (part == Part.HEAD && a.byPlayer && helmetOn) {
-                helmetOn = false
-                events.add(DuelEvent.HelmetOff(enemy.x[Ragdoll.HEAD], enemy.y[Ragdoll.HEAD] + 0.1f, a.vx * 0.25f, 4f))
-            }
-            if (a.kind == ArrowKind.BOMB) dmg += if (wasAlive) 20 else 0
-            val speed = sqrt(a.vx * a.vx + a.vy * a.vy)
-            // Push the body: the nearest point of the bone takes most of it.
-            val near = if (bone == 0) Ragdoll.HEAD else Ragdoll.BONES[bone][1]
-            target.impulse(near, a.vx / speed * 3.5f, a.vy / speed * 3.5f)
-            val kill = wasAlive && applyDamage(a.byPlayer, dmg)
-            // A fast killing arrow goes right through and keeps flying.
-            val pierce = kill && speed > PIERCE_SPEED && part != Part.ARM && a.kind != ArrowKind.BOMB
-            if (kill) target.kill(a.vx * (if (pierce) 1.2f else 0.9f), a.vy * 0.9f + 2f, near)
-            else if (wasAlive && target.alive) target.hurtBy(hx, hy, if (a.vx >= 0f) 1f else -1f, knockFor(part, a) * (if (dmg == 0) 0.4f else 1f))
-            events.add(DuelEvent.Hit(a.byPlayer, part, dmg, hx, hy, kill, a.kind, pierce))
-            if (a.kind == ArrowKind.ICE && a.byPlayer && !kill && wasAlive) {
-                enemyFrozen = true
-                events.add(DuelEvent.Frozen(enemy.x[Ragdoll.CHEST], enemy.y[Ragdoll.CHEST]))
-            }
-            if (a.kind == ArrowKind.BOMB) {
-                blast(a, hx, hy, events, direct = true)
+            if (best != null && bestHit != null) {
+                bodyHit(a, best.body, best, bestHit.first, bestHit.second, oTipX, oTipY, tipX, tipY, events)
                 return
             }
-            if (pierce) {
-                a.pierced = true
-                a.vx *= 0.6f
-                a.vy *= 0.6f
+        } else if (!a.pierced) {
+            val h = player.hitTest(oTipX, oTipY, tipX, tipY)
+            if (h != null && (player.alive || a.age < 6f)) {
+                bodyHit(a, player, null, h.first, h.second, oTipX, oTipY, tipX, tipY, events)
                 return
             }
-            stick(a, target, bone, hx, hy)
-            land(a, events)
-            return
         }
         // Platform or out of the world
-        for (p in platforms) {
+        for ((q, p) in platforms.withIndex()) {
             if (p.contains(tipX, tipY)) {
-                if (liquid && p !== platforms[0] && p !== platforms[1]) {
+                if (liquid && q == platforms.size - 1) {
                     // Into the water: it sinks (the splash is drawn by the game).
                     a.flying = false
                     arrows.remove(a)
@@ -799,21 +1068,144 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
                     return
                 }
                 if (a.kind == ArrowKind.BOMB) {
-                    blast(a, tipX, tipY, events, direct = false)
+                    blast(a, tipX, tipY, events, direct = null, barrel = false)
                     return
                 }
                 a.flying = false
                 a.stuckTime = time
+                a.stuckPlatform = q
                 events.add(DuelEvent.Miss(a.byPlayer, tipX, tipY, true))
                 land(a, events)
                 return
             }
         }
-        if (a.y < -40f || abs(a.x - spec.distance / 2f) > spec.distance + 60f) {
+        val far = (foes.maxOfOrNull { it.spec.x } ?: spec.distance)
+        if (a.y < groundY - 40f || a.x < -60f || a.x > far + 60f) {
             a.flying = false
             events.add(DuelEvent.Miss(a.byPlayer, a.x, a.y, false))
             land(a, events)
         }
+    }
+
+    /** True when the arrow was stopped (or redirected) by an obstacle this step. */
+    private fun hitObstacles(a: Arrow, ax: Float, ay: Float, bx: Float, by: Float, events: MutableList<DuelEvent>): Boolean {
+        for (o in obstacles) {
+            if (!o.alive) continue
+            val t: Float = if (o.kind == ObstacleKind.TARGET) {
+                segCircle(ax, ay, bx, by, o.cx, o.cy, (o.x1 - o.x0) / 2f) ?: continue
+            } else {
+                segRect(ax, ay, bx, by, o.x0, o.y0, o.x1, o.y1) ?: continue
+            }
+            val hx = ax + (bx - ax) * t
+            val hy = ay + (by - ay) * t
+            o.hitAt = time
+            when (o.kind) {
+                ObstacleKind.METAL -> {
+                    // Bounce: off the long faces vertically, off the ends horizontally.
+                    if (hx <= o.x0 + 0.05f || hx >= o.x1 - 0.05f) a.vx = -a.vx * 0.8f else a.vy = -a.vy * 0.8f
+                    a.x += a.vx * 0.02f; a.y += a.vy * 0.02f
+                    a.ricochet = true
+                    events.add(DuelEvent.Ricochet(hx, hy))
+                    return true
+                }
+                ObstacleKind.BARREL -> {
+                    o.alive = false
+                    events.add(DuelEvent.ObstacleHit(o.kind, o.cx, o.cy, true, a.byPlayer))
+                    blast(a, o.cx, o.cy, events, direct = null, barrel = true)
+                    return true
+                }
+                ObstacleKind.CRATE -> {
+                    // Smashed: the arrow flies on, slowed.
+                    o.alive = false
+                    a.vx *= 0.7f; a.vy *= 0.7f
+                    events.add(DuelEvent.ObstacleHit(o.kind, o.cx, o.cy, true, a.byPlayer))
+                    return false
+                }
+                ObstacleKind.TARGET -> {
+                    val r = (o.x1 - o.x0) / 2f
+                    val dist = sqrt((hx - o.cx) * (hx - o.cx) + (hy - o.cy) * (hy - o.cy)) / r
+                    val pts = when {
+                        dist < 0.2f -> 10
+                        dist < 0.45f -> 7
+                        dist < 0.7f -> 5
+                        else -> 2
+                    }
+                    o.alive = false
+                    events.add(DuelEvent.TargetHit(pts, hx, hy))
+                    a.flying = false
+                    a.stuckTime = time
+                    a.x = hx - cos(a.angle) * 0.3f; a.y = hy - sin(a.angle) * 0.3f
+                    land(a, events)
+                    return true
+                }
+                else -> {
+                    // Wood or stone: the arrow sticks; wood breaks after a few.
+                    a.flying = false
+                    a.stuckTime = time
+                    a.stuckPlatform = o.platform
+                    a.x = hx - cos(a.angle) * 0.28f; a.y = hy - sin(a.angle) * 0.28f
+                    var broken = false
+                    if (o.kind == ObstacleKind.WOOD) {
+                        o.hp -= if (a.kind == ArrowKind.FIRE || a.kind == ArrowKind.BOMB) 3 else 1
+                        if (o.hp <= 0) {
+                            o.alive = false
+                            broken = true
+                            // Arrows stuck in it fall
+                            arrows.removeAll { !it.flying && it.stuckIn == null && it.x in o.x0 - 0.5f..o.x1 + 0.5f && it.y in o.y0..o.y1 + 0.3f }
+                        }
+                    }
+                    events.add(DuelEvent.ObstacleHit(o.kind, hx, hy, broken, a.byPlayer))
+                    if (a.kind == ArrowKind.BOMB) { blast(a, hx, hy, events, direct = null, barrel = false); return true }
+                    land(a, events)
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private fun bodyHit(a: Arrow, target: Ragdoll, foe: Foe?, bone: Int, t: Float, ax: Float, ay: Float, bx: Float, by: Float, events: MutableList<DuelEvent>) {
+        val hx = ax + (bx - ax) * t
+        val hy = ay + (by - ay) * t
+        val part = Ragdoll.BONE_PART[bone]
+        val wasAlive = target.alive
+        var dmg = if (wasAlive) damageFor(a, part, foe) else 0
+        if (foe == null && shields > 0 && dmg > 0) {
+            shields--
+            dmg = 0
+        }
+        if (part == Part.HEAD && foe != null && foe.helmetOn) {
+            foe.helmetOn = false
+            events.add(DuelEvent.HelmetOff(target.x[Ragdoll.HEAD], target.y[Ragdoll.HEAD] + 0.1f, a.vx * 0.25f, 4f, foe.index))
+        }
+        if (a.kind == ArrowKind.BOMB) dmg += if (wasAlive) 20 else 0
+        val speed = sqrt(a.vx * a.vx + a.vy * a.vy)
+        val near = if (bone == 0) Ragdoll.HEAD else Ragdoll.BONES[bone][1]
+        target.impulse(near, a.vx / speed * 3.5f, a.vy / speed * 3.5f)
+        val died = wasAlive && applyDamage(foe, dmg)
+        val final = died && killed
+        // A fast killing arrow goes right through and keeps flying.
+        val pierce = died && speed > PIERCE_SPEED && part != Part.ARM && a.kind != ArrowKind.BOMB
+        if (died) target.kill(a.vx * (if (pierce) 1.2f else 0.9f), a.vy * 0.9f + 2f, near)
+        else if (wasAlive && target.alive) target.hurtBy(hx, hy, if (a.vx >= 0f) 1f else -1f, knockFor(part, a) * (if (dmg == 0) 0.4f else 1f))
+        events.add(DuelEvent.Hit(a.byPlayer, part, dmg, hx, hy, died, a.kind, pierce, foe?.index ?: -1, final, a.ricochet))
+        if (a.kind == ArrowKind.ICE && foe != null && !died && wasAlive) {
+            foe.frozen = true
+            events.add(DuelEvent.Frozen(target.x[Ragdoll.CHEST], target.y[Ragdoll.CHEST], foe.index))
+        }
+        if (a.kind == ArrowKind.BOMB) {
+            blast(a, hx, hy, events, direct = foe, barrel = false)
+            return
+        }
+        if (pierce) {
+            a.pierced = foe == null
+            a.passed = foe?.index ?: -1
+            a.vx *= 0.6f
+            a.vy *= 0.6f
+            return
+        }
+        stick(a, target, bone, hx, hy)
+        land(a, events)
     }
 
     /** How far a non-lethal hit shoves the archer back (meters). */
@@ -825,76 +1217,114 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
             Part.ARM -> 0.22f
         }
         val speed = sqrt(a.vx * a.vx + a.vy * a.vy)
-        // The player is shoved a bit less (losing by falling should be rare and earned).
         return base * (0.6f + 0.4f * (speed / MAX_SPEED)) * (if (a.kind == ArrowKind.FIRE) 1.2f else 1f) * (if (a.byPlayer) 1f else 0.65f)
     }
 
     /** An archer shoved past the edge of a high platform falls and dies. */
     private fun checkFalls(events: MutableList<DuelEvent>) {
         if (killed) return
-        for (q in 0..1) {
-            val r = if (q == 0) player else enemy
+        for (q in 0..foes.size) {
+            val foe = if (q == 0) null else foes[q - 1]
+            val r = foe?.body ?: player
             if (!r.alive) continue
             val p = platforms[q]
             val high = liquid || p.top - groundY > 0.5f
-            if (!high) {
-                // On the ground: just stops at the platform edge's line... nothing to fall from.
-                continue
-            }
+            if (!high) continue
             val out = r.rootX < p.x0 + 0.02f || r.rootX > p.x1 - 0.02f
             if (!out) continue
             val dir = if (r.rootX < (p.x0 + p.x1) / 2f) -1f else 1f
-            if (q == 0) { playerHp = 0; killByPlayer = false } else { enemyHp = 0; killByPlayer = true }
-            killed = true
+            if (foe == null) playerHp = 0 else foe.hp = 0
             r.kill(dir * 2.5f, 1.5f, Ragdoll.PELVIS)
-            events.add(DuelEvent.Fell(q == 1, r.x[Ragdoll.PELVIS], r.y[Ragdoll.PELVIS]))
-            if (inFlight.isEmpty() && turn != Turn.OVER) {
-                playerWon = killByPlayer
-                (if (killByPlayer) player else enemy).cheer = true
-                turn = Turn.OVER
-                overTime = 0f
+            val final = settleKill(foe)
+            events.add(DuelEvent.Fell(foe != null, r.x[Ragdoll.PELVIS], r.y[Ragdoll.PELVIS], foe?.index ?: -1, final))
+            if (final && inFlight.isEmpty() && turn != Turn.OVER) endDuel()
+            if (killed) return
+        }
+    }
+
+    /** After an archer died: is the duel decided? */
+    private fun settleKill(foe: Foe?): Boolean {
+        if (foe == null) {
+            killed = true
+            killByPlayer = false
+        } else {
+            lastFallen = foe.index
+            if (foes.none { it.alive }) {
+                killed = true
+                killByPlayer = true
             }
         }
+        return killed
     }
 
-    /** Takes [dmg] off the other archer; true when it was the killing blow. */
-    private fun applyDamage(byPlayer: Boolean, dmg: Int): Boolean {
+    private fun endDuel() {
+        playerWon = killByPlayer
+        if (killByPlayer) player.cheer = true else foes.firstOrNull { it.alive }?.body?.cheer = true
+        turn = Turn.OVER
+        overTime = 0f
+    }
+
+    /** Takes [dmg] off [foe] (null = the player); true when that archer died. */
+    private fun applyDamage(foe: Foe?, dmg: Int): Boolean {
         if (killed) return false
-        if (byPlayer) {
-            enemyHp = (enemyHp - dmg).coerceAtLeast(0)
-            if (enemyHp == 0) { killed = true; killByPlayer = true }
-        } else {
+        if (foe == null) {
             playerHp = (playerHp - dmg).coerceAtLeast(0)
-            if (playerHp == 0) { killed = true; killByPlayer = false }
+            if (playerHp == 0) { settleKill(null); return true }
+        } else {
+            if (foe.hp <= 0) return false
+            foe.hp = (foe.hp - dmg).coerceAtLeast(0)
+            if (foe.hp == 0) { settleKill(foe); return true }
         }
-        return killed && killByPlayer == byPlayer
+        return false
     }
 
-    /** Bomb arrow: area damage (unless it already hit the body directly) and a shove away from the blast. */
-    private fun blast(a: Arrow, x: Float, y: Float, events: MutableList<DuelEvent>, direct: Boolean) {
+    /**
+     * Explosion (bomb arrow or barrel): area damage to everyone in range on the other side (except the one hit
+     * directly, [direct]) and a shove away from the blast. A barrel hurts whoever is near, enemy or player.
+     */
+    private fun blast(a: Arrow, x: Float, y: Float, events: MutableList<DuelEvent>, direct: Foe?, barrel: Boolean) {
         a.flying = false
         arrows.remove(a)
-        val target = if (a.byPlayer) enemy else player
-        val dx = target.x[Ragdoll.CHEST] - x
-        val dy = target.y[Ragdoll.CHEST] - y
-        val d = sqrt(dx * dx + dy * dy)
-        var dmg = 0
-        var kill = false
-        if (!direct && d < BLAST_R && target.alive) {
-            dmg = (BLAST_DAMAGE * (1f - d / BLAST_R)).roundToInt().coerceAtLeast(5)
-            kill = applyDamage(a.byPlayer, dmg)
-        }
-        if (d < BLAST_R * 1.3f) {
+        var total = 0
+        var kills = 0
+        var anyKill = false
+        val victims = ArrayList<Pair<Ragdoll, Foe?>>()
+        if (a.byPlayer || barrel) for (f in foes) victims.add(f.body to f)
+        if (!a.byPlayer || barrel) victims.add(player to null)
+        for ((body, foe) in victims) {
+            if (!body.alive) continue
+            val dx = body.x[Ragdoll.CHEST] - x
+            val dy = body.y[Ragdoll.CHEST] - y
+            val d = sqrt(dx * dx + dy * dy)
+            if (d > BLAST_R * 1.3f) continue
+            var died = false
+            if (!(direct != null && foe === direct) && d < BLAST_R) {
+                val dmg = (BLAST_DAMAGE * (1f - d / BLAST_R) * (if (barrel) 1.2f else 1f)).roundToInt().coerceAtLeast(5)
+                total += dmg
+                if (foe == null && shields > 0) shields-- else died = applyDamage(foe, dmg)
+            }
             val push = 9f * (1f - d / (BLAST_R * 1.3f))
             val nx = if (d > 1e-3f) dx / d else 0f
             val ny = if (d > 1e-3f) dy / d else 1f
-            if (kill) target.kill(nx * push * 1.5f, ny * push + 5f, Ragdoll.CHEST)
-            else if (target.alive) {
-                for (p in 0 until Ragdoll.N) target.impulse(p, nx * push * 0.4f, ny * push * 0.4f + 1f)
-                target.hurtBy(x, y, if (nx >= 0f) 1f else -1f, 0.35f + push * 0.06f)
+            if (died) {
+                body.kill(nx * push * 1.5f, ny * push + 5f, Ragdoll.CHEST)
+                kills++
+                anyKill = true
+            } else if (body.alive) {
+                for (p in 0 until Ragdoll.N) body.impulse(p, nx * push * 0.4f, ny * push * 0.4f + 1f)
+                body.hurtBy(x, y, if (nx >= 0f) 1f else -1f, 0.35f + push * 0.06f)
             }
         }
-        events.add(DuelEvent.Explode(a.byPlayer, x, y, dmg, kill))
+        // Crates and wood nearby break too, other barrels go off later in a chain (next step).
+        for (o in obstacles) {
+            if (!o.alive || (o.kind != ObstacleKind.CRATE && o.kind != ObstacleKind.WOOD)) continue
+            val dx = o.cx - x; val dy = o.cy - y
+            if (dx * dx + dy * dy < BLAST_R * BLAST_R) {
+                o.alive = false
+                events.add(DuelEvent.ObstacleHit(o.kind, o.cx, o.cy, true, a.byPlayer))
+            }
+        }
+        events.add(DuelEvent.Explode(a.byPlayer, x, y, total, anyKill, kills, anyKill && killed, barrel))
         land(a, events)
     }
 
@@ -910,7 +1340,6 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
         a.along = (((hx - x0) * ex + (hy - y0) * ey) / l2).coerceIn(0f, 1f)
         val boneAng = atan2(ey, ex)
         a.relAngle = a.angle - boneAng
-        // The arrow shaft sits mostly outside the body: its centre is behind the tip.
         a.depth = -0.22f
     }
 
@@ -919,45 +1348,74 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
         inFlight.remove(a)
         if (inFlight.isNotEmpty() || turn == Turn.OVER) return
         if (killed) {
-            playerWon = killByPlayer
-            (if (killByPlayer) player else enemy).cheer = true
-            turn = Turn.OVER
-            overTime = 0f
+            endDuel()
             return
         }
-        if (a.byPlayer) {
-            if (enemyFrozen) {
-                // The frozen enemy loses this turn.
-                enemyFrozen = false
-                events.add(DuelEvent.Thaw(enemy.x[Ragdoll.CHEST], enemy.y[Ragdoll.CHEST]))
-                turn = Turn.PLAYER
-                events.add(DuelEvent.TurnStart(true))
-                return
-            }
-            turn = Turn.ENEMY
-            enemyWait = 0f
-            if (spec.power == BossPower.HEAL && enemyHp < maxEnemyHp) {
-                val heal = min(HEAL_AMOUNT, maxEnemyHp - enemyHp)
-                enemyHp += heal
-                events.add(DuelEvent.Heal(heal, enemy.x[Ragdoll.HEAD], enemy.y[Ragdoll.HEAD] + 0.4f))
-            }
-            enemyPlan = planEnemyShot()
-            events.add(DuelEvent.TurnStart(false))
-        } else {
+        if (practice) {
+            turn = Turn.PLAYER
+            events.add(DuelEvent.TurnStart(true))
+            return
+        }
+        if (a.byPlayer) nextEnemyTurn(events)
+        else {
             turn = Turn.PLAYER
             events.add(DuelEvent.TurnStart(true))
         }
     }
 
+    /** The next living enemy (round robin) shoots; frozen ones lose their turn. */
+    private fun nextEnemyTurn(events: MutableList<DuelEvent>) {
+        val n = foes.size
+        var idx = activeFoe
+        for (k in 1..n) {
+            val i = (activeFoe + k) % n
+            val f = foes[i]
+            if (!f.alive) continue
+            if (f.frozen) {
+                f.frozen = false
+                events.add(DuelEvent.Thaw(f.body.x[Ragdoll.CHEST], f.body.y[Ragdoll.CHEST], i))
+                // Single enemy frozen: straight back to the player.
+                if (foes.count { it.alive } == 1) {
+                    activeFoe = i
+                    turn = Turn.PLAYER
+                    events.add(DuelEvent.TurnStart(true))
+                    return
+                }
+                continue
+            }
+            idx = i
+            break
+        }
+        val f = foes[idx]
+        if (!f.alive) {
+            turn = Turn.PLAYER
+            events.add(DuelEvent.TurnStart(true))
+            return
+        }
+        activeFoe = idx
+        turn = Turn.ENEMY
+        enemyWait = 0f
+        if (f.spec.power == BossPower.HEAL && f.hp < f.maxHp) {
+            val heal = min(HEAL_AMOUNT, f.maxHp - f.hp)
+            f.hp += heal
+            events.add(DuelEvent.Heal(heal, f.body.x[Ragdoll.HEAD], f.body.y[Ragdoll.HEAD] + 0.4f, idx))
+        }
+        if (!versus) f.plan = planShot(f)
+        events.add(DuelEvent.TurnStart(false, idx))
+    }
+
     /**
-     * Would this arrow land a killing blow within [seconds]? Used for the kill cam (bodies are taken as
-     * they are now).
+     * Would this arrow land the duel-deciding blow within [seconds]? Used for the kill cam (bodies are taken
+     * as they are now).
      */
     fun predictKill(a: Arrow, seconds: Float): Boolean {
-        if (a.pierced || killed) return false
-        if (a.byPlayer && bossShield > 0) return false
-        val target = if (a.byPlayer) enemy else player
-        if (!target.alive) return false
+        if (a.pierced || killed || practice) return false
+        val targets: List<Pair<Ragdoll, Foe?>> = if (a.byPlayer) {
+            if (aliveFoes != 1) return false
+            val f = foes.first { it.alive }
+            if (f.shield > 0) return false
+            listOf(f.body to f)
+        } else listOf(player to null)
         var x = a.x; var y = a.y; var vx = a.vx; var vy = a.vy
         val dt = 1f / 60f
         var t = 0f
@@ -967,13 +1425,15 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
             x += vx * dt; y += vy * dt
             val ang = atan2(vy, vx)
             val c = cos(ang) * 0.35f; val s = sin(ang) * 0.35f
-            val hit = target.hitTest(ox + c, oy + s, x + c, y + s)
-            if (hit != null) {
+            for (o in obstacles) if (o.alive && o.kind != ObstacleKind.CRATE && segRect(ox + c, oy + s, x + c, y + s, o.x0, o.y0, o.x1, o.y1) != null) return false
+            for ((body, foe) in targets) {
+                if (!body.alive) continue
+                val hit = body.hitTest(ox + c, oy + s, x + c, y + s) ?: continue
                 val part = Ragdoll.BONE_PART[hit.first]
-                var dmg = damageFor(a, part)
+                var dmg = damageFor(a, part, foe)
                 if (a.kind == ArrowKind.BOMB) dmg += 20
-                if (!a.byPlayer && shields > 0) dmg = 0
-                return dmg >= (if (a.byPlayer) enemyHp else playerHp)
+                if (foe == null && shields > 0) dmg = 0
+                return dmg >= (foe?.hp ?: playerHp)
             }
             for (p in platforms) if (p.contains(x + c, y + s)) return false
             t += dt
@@ -983,32 +1443,68 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
 
     // ------------------------------------------------------------------ enemy AI
 
-    private var enemyPlan: Pair<Float, Float> = 0.3f to 0.7f
-
     /**
      * Finds an angle/power that would hit the player's chest (wind included), then adds an error that
-     * shrinks with skill and with every shot (the enemy "learns").
+     * shrinks with skill and with every shot (the enemy "learns"). If a wall is in the way, lobs over it.
      */
-    private fun planEnemyShot(): Pair<Float, Float> {
-        // Aim at a point near the player's chest: the miss distance (meters) shrinks with skill and a bit
-        // with every shot, but never to zero. Same feel at any distance.
-        val learn = (1f - enemyShots * ENEMY_LEARN).coerceAtLeast(ENEMY_LEARN_FLOOR)
-        val focus = if (spec.power == BossPower.FOCUS) 0.8f else 1f
-        val sigma = (ENEMY_ERR_MAX + (ENEMY_ERR_MIN - ENEMY_ERR_MAX) * spec.enemySkill) * learn * focus
-        // Height is what decides a hit (the arc crosses the body anyway), so the error is vertical.
+    private fun planShot(f: Foe): Pair<Float, Float> {
+        val learn = (1f - f.shots * ENEMY_LEARN).coerceAtLeast(ENEMY_LEARN_FLOOR)
+        val focusMul = if (f.spec.power == BossPower.FOCUS) 0.8f else 1f
+        // In a group each enemy aims worse (there are several of them shooting in turns).
+        val groupMul = if (foes.size > 1) 1.45f + 0.12f * (foes.size - 2) else 1f
+        val sigma = (ENEMY_ERR_MAX + (ENEMY_ERR_MIN - ENEMY_ERR_MAX) * f.spec.skill) * learn * focusMul * groupMul
         val tx = player.x[Ragdoll.CHEST] + gauss() * 0.3f
         val ty = player.y[Ragdoll.CHEST] - 0.15f + gauss() * sigma
-        return solveShot(enemy.bowX(), enemy.bowY(), -1f, tx, ty, spec.wind)
+        val e = f.body
+        return aimAround(e.bowX(), e.bowY(), -1f, tx, ty, player.rootX)
+    }
+
+    /** The best shot at (tx, ty) that clears the obstacles in between: flat if possible, else higher and higher lobs. */
+    fun aimAround(sx: Float, sy: Float, dir: Float, tx: Float, ty: Float, untilX: Float): Pair<Float, Float> {
+        val first = solveShot(sx, sy, dir, tx, ty, spec.wind)
+        if (!blocked(sx, sy, dir, first.first, first.second, untilX)) return first
+        for (m in LOB_ANGLES) {
+            val s = solveShot(sx, sy, dir, tx, ty, spec.wind, minAngle = m)
+            if (!blocked(sx, sy, dir, s.first, s.second, untilX)) return s
+        }
+        return first
+    }
+
+    /** Does this shot run into a solid obstacle before reaching [untilX]? (Also used by the test bot.) */
+    fun blocked(sx: Float, sy: Float, dir: Float, aim: Float, power: Float, untilX: Float): Boolean {
+        val speed = MIN_SPEED + (MAX_SPEED - MIN_SPEED) * power
+        var x = sx; var y = sy
+        var vx = cos(aim) * speed * dir; var vy = sin(aim) * speed
+        val dt = 1f / 60f
+        var t = 0f
+        while (t < 5f) {
+            val ox = x; val oy = y
+            vx += spec.wind * dt; vy -= GRAVITY * dt
+            x += vx * dt; y += vy * dt
+            for (o in obstacles) {
+                if (!o.alive || o.kind == ObstacleKind.CRATE || o.kind == ObstacleKind.BARREL) continue
+                if (dir < 0f && o.platform > 0) continue // its own shield/props
+                if (o.kind == ObstacleKind.TARGET) continue
+                if (segRect(ox, oy, x, y, o.x0, o.y0, o.x1, o.y1) != null) return true
+            }
+            if ((x - untilX) * dir > 0f) return false
+            // Towers standing in between (not the shooter's nor the target's).
+            if (abs(x - sx) > 2.2f && (untilX - x) * dir > 2.2f) {
+                for (q in 0 until platforms.size - 1) if (platforms[q].contains(x, y)) return true
+            }
+            t += dt
+        }
+        return false
     }
 
     private fun gauss(): Float {
-        // Sum of uniforms ≈ normal (mean 0, sd 1).
         var s = 0f
         repeat(4) { s += rnd.nextFloat() }
         return (s - 2f) * 1.732f
     }
 
     companion object {
+        private val LOB_ANGLES = floatArrayOf(0.6f, 0.8f, 0.95f, 1.1f, 1.22f)
         /** Enemy miss spread (meters, 1 sd) for skill 0 and skill 1. */
         var ENEMY_ERR_MAX = 2.6f
         var ENEMY_ERR_MIN = 1.3f
@@ -1018,23 +1514,29 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
         var PLAYER_HEAD_DAMAGE = 50
         const val MIN_SPEED = 9f
         const val PIERCE_SPEED = 20f
-        /** How far below the lower tower top the ground is (meters). */
         const val GROUND_DEPTH = 10f
         /** Height of the rock an archer stands on when "on the ground" over water. */
         const val LOW_ROCK = 1.3f
+        /** Height of a boat's deck above the water. */
+        const val BOAT_DECK = 0.45f
         const val SHIELD_R = 1.25f
         const val BLAST_R = 2.2f
         const val BLAST_DAMAGE = 55
         const val HEAL_AMOUNT = 12
+        /** Damage multiplier of a group archer's arrows. */
+        const val GROUP_DAMAGE = 0.6f
         const val MAX_SPEED = 30f
+        /** Farthest an enemy may stand (bow range with some margin). */
+        const val MAX_FOE_X = 55f
+        private val DUMMY = Foe(0, FoeSpec(20f, 0f, 1, 0f, false, 0, false), Ragdoll(9999f, -9999f, -1f), 1)
 
         /** Searches angle/power so an arrow from (sx, sy) facing [dir] passes closest to (tx, ty). */
-        fun solveShot(sx: Float, sy: Float, dir: Float, tx: Float, ty: Float, wind: Float): Pair<Float, Float> {
-            var bestA = 0.3f
+        fun solveShot(sx: Float, sy: Float, dir: Float, tx: Float, ty: Float, wind: Float, minAngle: Float = -0.9f): Pair<Float, Float> {
+            var bestA = max(0.3f, minAngle)
             var bestP = 0.7f
             var bestErr = Float.MAX_VALUE
-            var a = -0.9f
-            while (a <= 1.2f) {
+            var a = minAngle
+            while (a <= 1.3f) {
                 var p = 0.15f
                 while (p <= 1.0001f) {
                     val e = missDistance(sx, sy, dir, a, p, tx, ty, wind)
@@ -1043,11 +1545,10 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
                 }
                 a += 0.05f
             }
-            // Refine around the best.
             var step = 0.025f
             repeat(4) {
                 for (da in -2..2) for (dp in -2..2) {
-                    val aa = bestA + da * step
+                    val aa = max(minAngle, bestA + da * step)
                     val pp = (bestP + dp * step).coerceIn(0.1f, 1f)
                     val e = missDistance(sx, sy, dir, aa, pp, tx, ty, wind)
                     if (e < bestErr) { bestErr = e; bestA = aa; bestP = pp }
@@ -1096,6 +1597,26 @@ class Duel(val spec: LevelSpec, var playerHp: Int = 100, seed: Long = System.nan
 
     /** Rounded helpers used by the UI. */
     fun windKmh(): Int = (spec.wind * 3.6f * 2.5f).roundToInt()
+}
+
+/** Fraction along a→b where it enters the box, or null (Liang–Barsky, no allocations). */
+fun segRect(ax: Float, ay: Float, bx: Float, by: Float, x0: Float, y0: Float, x1: Float, y1: Float): Float? {
+    var t0 = 0f
+    var t1 = 1f
+    val dx = bx - ax
+    val dy = by - ay
+    for (i in 0 until 4) {
+        val p = when (i) { 0 -> -dx; 1 -> dx; 2 -> -dy; else -> dy }
+        val q = when (i) { 0 -> ax - x0; 1 -> x1 - ax; 2 -> ay - y0; else -> y1 - ay }
+        if (p == 0f) {
+            if (q < 0f) return null
+        } else {
+            val r = q / p
+            if (p < 0f) { if (r > t1) return null; if (r > t0) t0 = r }
+            else { if (r < t0) return null; if (r < t1) t1 = r }
+        }
+    }
+    return t0
 }
 
 /** Free, not used for logic: ease for the slow motion. */

@@ -118,6 +118,18 @@ object Progress {
     var rouletteVideoSpins by mutableIntStateOf(0)
         private set
 
+    /** Talent levels: extra health, longer aim guide, starting shield, more coins (see [Talents]). */
+    var talents by mutableStateOf(List(4) { 0 })
+        private set
+    /** Victory celebration in use and the ones owned. */
+    var danceId by mutableIntStateOf(0)
+        private set
+    var ownedDances by mutableStateOf(setOf(0))
+        private set
+    /** Best target practice score. */
+    var targetBest by mutableIntStateOf(0)
+        private set
+
     /** Special arrows in stock, by ArrowKind (index 0 = normal, unused). */
     var arrowStock by mutableStateOf(List(5) { 0 })
         private set
@@ -175,9 +187,49 @@ object Progress {
         chestRun = prefs.getInt("chest_run", 0)
         dailyLastDay = prefs.getInt("daily_last_day", 0)
         dailyRun = prefs.getInt("daily_run", 0)
+        talents = (prefs.getString("talents", "0,0,0,0") ?: "0,0,0,0").split(",").mapNotNull { it.toIntOrNull() }
+            .let { if (it.size == 4) it else List(4) { 0 } }
+        danceId = prefs.getInt("dance", 0)
+        ownedDances = (prefs.getStringSet("owned_dances", setOf("0")) ?: setOf("0")).mapNotNull { it.toIntOrNull() }.toSet() + 0
+        targetBest = prefs.getInt("target_best", 0)
         // New players start with two of each special arrow.
         arrowStock = (prefs.getString("arrow_stock", "0,2,2,2,2") ?: "0,2,2,2,2").split(",").mapNotNull { it.toIntOrNull() }
             .let { if (it.size == 5) it else listOf(0, 2, 2, 2, 2) }
+    }
+
+    // ------------------------------------------------------------------ talents and celebrations
+
+    fun talent(kind: Int): Int = talents.getOrElse(kind) { 0 }
+
+    fun buyTalent(kind: Int): Boolean {
+        val lv = talent(kind)
+        if (lv >= Talents.MAX[kind]) return false
+        if (!spend(Talents.cost(kind, lv))) return false
+        talents = talents.toMutableList().also { it[kind] = lv + 1 }
+        prefs.edit().putString("talents", talents.joinToString(",")).apply()
+        return true
+    }
+
+    fun buyDance(id: Int, price: Int): Boolean {
+        if (id in ownedDances) return true
+        if (!spend(price)) return false
+        ownedDances = ownedDances + id
+        prefs.edit().putStringSet("owned_dances", ownedDances.map { it.toString() }.toSet()).apply()
+        return true
+    }
+
+    fun selectDance(id: Int) {
+        if (id !in ownedDances) return
+        danceId = id
+        prefs.edit().putInt("dance", id).apply()
+    }
+
+    /** True when [score] is a new target practice record. */
+    fun onTargets(score: Int): Boolean {
+        if (score <= targetBest) return false
+        targetBest = score
+        prefs.edit().putInt("target_best", score).apply()
+        return true
     }
 
     // ------------------------------------------------------------------ special arrows
@@ -559,4 +611,25 @@ object Progress {
 
     private fun dayOf(c: Calendar): Int =
         c.get(Calendar.YEAR) * 10000 + (c.get(Calendar.MONTH) + 1) * 100 + c.get(Calendar.DAY_OF_MONTH)
+}
+
+/** Archer talents bought with coins. */
+object Talents {
+    const val HEALTH = 0
+    const val GUIDE = 1
+    const val SHIELD = 2
+    const val COINS = 3
+    val MAX = intArrayOf(5, 3, 2, 5)
+
+    fun cost(kind: Int, level: Int): Int = when (kind) {
+        HEALTH -> 300 + level * 350
+        GUIDE -> 500 + level * 600
+        SHIELD -> 900 + level * 1200
+        else -> 250 + level * 300
+    }
+}
+
+/** Victory celebrations (prices); 0 = the free jump. */
+object Dances {
+    val PRICES = intArrayOf(0, 600, 900, 1400)
 }

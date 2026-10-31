@@ -106,6 +106,18 @@ class MainActivity : ComponentActivity() {
                                         go(Screen.GAME)
                                     }
                                 },
+                                onVersus = {
+                                    ads.onNewGame {
+                                        host.playVersus()
+                                        go(Screen.GAME)
+                                    }
+                                },
+                                onTargets = {
+                                    ads.onNewGame {
+                                        host.playTargets()
+                                        go(Screen.GAME)
+                                    }
+                                },
                             )
                             Screen.GAME -> {
                                 GameScreen(
