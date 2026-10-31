@@ -170,7 +170,7 @@ fun GameScreen(host: GameHost, ads: AdsManager, sound: SoundManager, onGreatMome
             }
         }
 
-        if (host.boss && !host.touched && host.phase == Phase.PLAYING) BossBanner(Modifier.align(Alignment.Center).padding(bottom = 220.dp))
+        if (host.boss && !host.touched && host.phase == Phase.PLAYING) BossBanner(host.bossHintRes, Modifier.align(Alignment.Center).padding(bottom = 220.dp))
 
         if (host.notice != 0 && host.phase == Phase.PLAYING) {
             NoticeCard(host.notice, Modifier.align(Alignment.Center).padding(bottom = 60.dp, start = 24.dp, end = 24.dp)) { host.clearNotice() }
@@ -179,7 +179,7 @@ fun GameScreen(host: GameHost, ads: AdsManager, sound: SoundManager, onGreatMome
         if (!host.touched && host.phase == Phase.PLAYING && host.shields == 0 && ads.rewardedReady &&
             (host.boss || host.endless || host.failsHere >= 1)
         ) {
-            ShieldOffer(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 80.dp)) {
+            ShieldOffer(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 175.dp)) {
                 ads.showRewarded { host.addShield() }
             }
         }
@@ -193,6 +193,12 @@ fun GameScreen(host: GameHost, ads: AdsManager, sound: SoundManager, onGreatMome
         }
 
         if (host.phase == Phase.PLAYING) DuelIntro(host, Modifier.align(Alignment.Center).padding(bottom = 120.dp))
+
+        if (host.phase == Phase.PLAYING && !host.paused) {
+            SpecialArrowBar(host, ads, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 108.dp))
+        }
+
+        TitleBanner(host.title, Modifier.align(Alignment.TopCenter).padding(top = 150.dp))
 
         Box(Modifier.align(Alignment.BottomCenter).navigationBarsPadding()) { BannerAd(ads) }
 
@@ -359,13 +365,13 @@ private fun DuelIntro(host: GameHost, modifier: Modifier) {
 }
 
 @Composable
-private fun BossBanner(modifier: Modifier) {
+private fun BossBanner(hintRes: Int, modifier: Modifier) {
     val t = rememberInfiniteTransition(label = "boss")
     val s by t.animateFloat(0.95f, 1.06f, infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "s")
     Column(modifier.graphicsLayer { scaleX = s; scaleY = s }, horizontalAlignment = Alignment.CenterHorizontally) {
         CrownIcon(Modifier.size(54.dp, 40.dp))
         Text(stringResource(R.string.boss_duel), style = Styles.glow(30, Palette.Gold, FontWeight.Black))
-        Text(stringResource(R.string.boss_hint), style = Styles.plain(14, Color.White, FontWeight.Bold), textAlign = TextAlign.Center)
+        Text(stringResource(if (hintRes != 0) hintRes else R.string.boss_hint), style = Styles.plain(14, Color.White, FontWeight.Bold), textAlign = TextAlign.Center)
     }
 }
 
@@ -555,6 +561,7 @@ private fun WinOverlay(host: GameHost, ads: AdsManager, sound: SoundManager, onG
                     textAlign = TextAlign.Center,
                 )
                 if (!host.daily) Text(stringResource(R.string.level_x, host.level), style = Styles.plain(17, Palette.TextSecondary, FontWeight.Bold))
+                if (host.game.recorder.clip() != null) ReplayView(host)
                 WinStars(host.stars, sound)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
                     Text(host.score.toString(), style = Styles.glow(44, Color.White, FontWeight.Black))
@@ -644,5 +651,198 @@ private fun CountUpCoins(amount: Int) {
         CoinIcon(Modifier.size(30.dp))
         Spacer(Modifier.width(8.dp))
         Text("+" + a.value.toInt(), style = Styles.glow(30, Palette.Gold, FontWeight.Black))
+    }
+}
+
+// ------------------------------------------------------------------ special arrows, titles, replay
+
+/** Four special arrows (fire, triple, bomb, ice) with how many are left; tap to arm one for the next shot. */
+@Composable
+private fun SpecialArrowBar(host: GameHost, ads: AdsManager, modifier: Modifier) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        for (kind in 1..4) {
+            val count = Progress.arrowCount(kind)
+            val selected = host.selectedArrow == kind
+            val enabled = host.myTurn
+            val scale by androidx.compose.animation.core.animateFloatAsState(if (selected) 1.15f else 1f, spring(dampingRatio = 0.5f, stiffness = 500f), label = "s")
+            Box(
+                Modifier
+                    .size(54.dp)
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        alpha = if (enabled) 1f else 0.5f
+                    },
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(50))
+                        .background(
+                            if (selected) Brush.verticalGradient(listOf(Color(0xFFFDE68A), Color(0xFFF59E0B)))
+                            else Brush.verticalGradient(listOf(Color(0xCC1E1538), Color(0xCC0B0720))),
+                        )
+                        .border(if (selected) 2.5.dp else 1.dp, if (selected) Color.White else Palette.GlassBorder, RoundedCornerShape(50))
+                        .clickable(enabled = enabled) {
+                            if (!host.selectArrow(kind)) {
+                                if (ads.rewardedReady) ads.showRewarded { host.giveArrow(kind) }
+                                else android.widget.Toast.makeText(context, R.string.no_video, android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) { ArrowKindIcon(kind, Modifier.size(32.dp)) }
+                // Count (or a "watch video" badge when empty)
+                Box(
+                    Modifier
+                        .align(Alignment.BottomEnd)
+                        .size(22.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(if (count > 0) Color(0xFF7C3AED) else Color(0xFF0EA5E9))
+                        .border(1.5.dp, Color.White, RoundedCornerShape(50)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(if (count > 0) (if (count > 99) "99" else count.toString()) else "▶", style = Styles.plain(11, Color.White, FontWeight.Black))
+                }
+            }
+        }
+    }
+}
+
+/** Icon of a special arrow kind. */
+@Composable
+fun ArrowKindIcon(kind: Int, modifier: Modifier) {
+    Canvas(modifier) {
+        val w = size.width
+        val h = size.height
+        val shaft = Color(0xFFD9A066)
+        fun arrow(x0: Float, y0: Float, x1: Float, y1: Float, head: Color) {
+            drawLine(Color(0xFF1A1226), Offset(x0, y0), Offset(x1, y1), w * 0.13f, StrokeCap.Round)
+            drawLine(shaft, Offset(x0, y0), Offset(x1, y1), w * 0.07f, StrokeCap.Round)
+            drawCircle(head, w * 0.1f, Offset(x1, y1))
+        }
+        when (kind) {
+            1 -> {
+                // Fire
+                drawCircle(Color(0xFFF97316).copy(alpha = 0.35f), w * 0.36f, Offset(w * 0.66f, h * 0.36f))
+                arrow(w * 0.15f, h * 0.85f, w * 0.68f, h * 0.32f, Color(0xFFF97316))
+                drawOval(Color(0xFFF97316), Offset(w * 0.56f, h * 0.06f), Size(w * 0.26f, h * 0.36f))
+                drawOval(Color(0xFFFDE047), Offset(w * 0.62f, h * 0.16f), Size(w * 0.14f, h * 0.22f))
+            }
+            2 -> {
+                // Triple
+                arrow(w * 0.12f, h * 0.8f, w * 0.8f, h * 0.18f, Color(0xFFCBD5E1))
+                arrow(w * 0.1f, h * 0.62f, w * 0.72f, h * 0.06f, Color(0xFFCBD5E1))
+                arrow(w * 0.3f, h * 0.92f, w * 0.92f, h * 0.36f, Color(0xFFCBD5E1))
+            }
+            3 -> {
+                // Bomb
+                drawCircle(Color(0xFF1A1226), w * 0.34f, Offset(w * 0.45f, h * 0.58f))
+                drawCircle(Color(0xFF3F3F46), w * 0.29f, Offset(w * 0.45f, h * 0.58f))
+                drawCircle(Color.White.copy(alpha = 0.5f), w * 0.08f, Offset(w * 0.35f, h * 0.48f))
+                drawLine(Color(0xFFD6D3D1), Offset(w * 0.62f, h * 0.32f), Offset(w * 0.78f, h * 0.14f), w * 0.07f, StrokeCap.Round)
+                drawCircle(Color(0xFFFDE047), w * 0.09f, Offset(w * 0.8f, h * 0.12f))
+            }
+            else -> {
+                // Ice: a snowflake
+                val c = Offset(w / 2f, h / 2f)
+                for (i in 0 until 3) {
+                    val a = Math.toRadians(i * 60.0).toFloat()
+                    val dx = kotlin.math.cos(a) * w * 0.42f
+                    val dy = kotlin.math.sin(a) * w * 0.42f
+                    drawLine(Color(0xFF67E8F9), Offset(c.x - dx, c.y - dy), Offset(c.x + dx, c.y + dy), w * 0.1f, StrokeCap.Round)
+                }
+                drawCircle(Color.White, w * 0.1f, c)
+            }
+        }
+    }
+}
+
+/** Combo title ("DOUBLE HEADSHOT!") punching in with its bonus, then floating away. */
+@Composable
+private fun TitleBanner(title: com.farias.prismaarchers.game.TitleShow?, modifier: Modifier) {
+    if (title == null) return
+    val anim = remember(title.id) { Animatable(0f) }
+    LaunchedEffect(title.id) { anim.animateTo(1f, tween(1700, easing = androidx.compose.animation.core.LinearEasing)) }
+    val done by remember(title.id) { androidx.compose.runtime.derivedStateOf { anim.value >= 1f } }
+    if (done) return
+    Column(
+        modifier.graphicsLayer {
+            val t = anim.value
+            val inT = (t / 0.15f).coerceIn(0f, 1f)
+            val sc = if (t < 0.15f) 2f - easeOutBack(inT) else 1f
+            scaleX = sc
+            scaleY = sc
+            translationY = -(t - 0.6f).coerceAtLeast(0f) * 120f
+            alpha = if (t < 0.08f) t / 0.08f else (1f - (t - 0.75f) / 0.25f).coerceIn(0f, 1f)
+            rotationZ = if (t < 0.15f) (1f - inT) * -8f else 0f
+        },
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(stringResource(title.textRes), style = Styles.gradient(34), textAlign = TextAlign.Center)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (title.bonus > 0) Text("+${title.bonus}", style = Styles.glow(20, Color.White, FontWeight.Black))
+            if (title.coins > 0) {
+                Spacer(Modifier.width(10.dp))
+                CoinIcon(Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("+${title.coins}", style = Styles.glow(20, Palette.Gold, FontWeight.Black))
+            }
+        }
+    }
+}
+
+/** The killing blow again, looping, in a little screen inside the victory panel. */
+@Composable
+private fun ReplayView(host: GameHost) {
+    val clip = remember { host.game.recorder.clip() } ?: return
+    val painter = remember { ArcheryPainter() }
+    val frame = remember { androidx.compose.runtime.mutableIntStateOf(clip[0]) }
+    val clock = remember { floatArrayOf(0f) }
+    LaunchedEffect(Unit) {
+        var last = 0L
+        var acc = 0f
+        var hold = 0f
+        while (true) {
+            androidx.compose.runtime.withFrameNanos { now ->
+                val dt = if (last == 0L) 0f else ((now - last) / 1e9f).coerceAtMost(0.1f)
+                last = now
+                clock[0] += dt
+                if (frame.intValue >= clip[1]) {
+                    hold += dt
+                    if (hold > 0.8f) { hold = 0f; frame.intValue = clip[0] }
+                } else {
+                    acc += dt
+                    while (acc >= 1f / 30f && frame.intValue < clip[1]) { acc -= 1f / 30f; frame.intValue++ }
+                }
+            }
+        }
+    }
+    val shape = RoundedCornerShape(16.dp)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(150.dp)
+            .clip(shape)
+            .border(1.5.dp, Color.White.copy(alpha = 0.35f), shape),
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            painter.drawReplay(this, host, frame.intValue, clock[0])
+        }
+        Row(
+            Modifier
+                .align(Alignment.TopStart)
+                .padding(8.dp)
+                .clip(RoundedCornerShape(50))
+                .background(Color(0x99000000))
+                .padding(horizontal = 8.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val t = rememberInfiniteTransition(label = "rec")
+            val a by t.animateFloat(0.3f, 1f, infiniteRepeatable(tween(500), RepeatMode.Reverse), label = "a")
+            Box(Modifier.size(8.dp).graphicsLayer { alpha = a }.clip(RoundedCornerShape(50)).background(Color(0xFFF43F5E)))
+            Spacer(Modifier.width(6.dp))
+            Text(stringResource(R.string.replay), style = Styles.plain(11, Color.White, FontWeight.Black))
+        }
     }
 }

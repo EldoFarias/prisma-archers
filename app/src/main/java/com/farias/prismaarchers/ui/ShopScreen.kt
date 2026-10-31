@@ -149,10 +149,11 @@ fun ShopScreen(host: GameHost, ads: AdsManager, sound: SoundManager, onBack: () 
                     TabChip(stringResource(R.string.outfits), tab == 0, Modifier.weight(1f)) { tab = 0 }
                     TabChip(stringResource(R.string.bows), tab == 1, Modifier.weight(1f)) { tab = 1 }
                     TabChip(stringResource(R.string.trails), tab == 2, Modifier.weight(1f)) { tab = 2 }
+                    TabChip(stringResource(R.string.special_arrows), tab == 3, Modifier.weight(1f)) { tab = 3 }
                 }
                 val locked = if (tab == 0) Looks.outfits.filter { !Progress.ownsOutfit(it.id) }.map { it.id }
                 else Looks.bows.filter { !Progress.ownsBow(it.id) }.map { it.id }
-                if (locked.isNotEmpty() && tab != 2) {
+                if (locked.isNotEmpty() && tab < 2) {
                     MysteryButton(MYSTERY_PRICE, Progress.coins >= MYSTERY_PRICE) {
                         if (!Progress.spend(MYSTERY_PRICE)) { sound.play(Sfx.INVALID); return@MysteryButton }
                         val id = locked.random()
@@ -173,6 +174,7 @@ fun ShopScreen(host: GameHost, ads: AdsManager, sound: SoundManager, onBack: () 
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     when (tab) {
+                        3 -> for (kind in 1..4) ArrowPackRow(kind, sound)
                         0 -> Looks.outfits.chunked(3).forEach { row ->
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 row.forEach { o ->
@@ -214,7 +216,7 @@ fun ShopScreen(host: GameHost, ads: AdsManager, sound: SoundManager, onBack: () 
                         }
                     }
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                if (tab != 3) Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.weight(1f)) {
                         when (tab) {
                             0 -> {
@@ -532,7 +534,7 @@ private fun TabChip(text: String, active: Boolean, modifier: Modifier, onClick: 
             .border(1.dp, if (active) Color.White.copy(alpha = 0.3f) else Palette.GlassBorder, shape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
-    ) { Text(text, style = Styles.plain(16, Color.White, FontWeight.ExtraBold)) }
+    ) { FitText(text, Styles.plain(15, Color.White, FontWeight.ExtraBold), minSp = 9f, modifier = Modifier.padding(horizontal = 4.dp)) }
 }
 
 @Composable
@@ -611,3 +613,53 @@ private fun ItemCard(
     }
 }
 
+
+/** Prices of a pack of 3 special arrows, by ArrowKind. */
+private val ARROW_PACK_PRICE = intArrayOf(0, 120, 150, 200, 150)
+private val ARROW_NAME = intArrayOf(0, R.string.arrow_fire, R.string.arrow_triple, R.string.arrow_bomb, R.string.arrow_ice)
+private val ARROW_DESC = intArrayOf(0, R.string.arrow_fire_desc, R.string.arrow_triple_desc, R.string.arrow_bomb_desc, R.string.arrow_ice_desc)
+
+@Composable
+private fun ArrowPackRow(kind: Int, sound: SoundManager) {
+    val shape = RoundedCornerShape(18.dp)
+    val price = ARROW_PACK_PRICE[kind]
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Color(0x22FFFFFF))
+            .border(1.dp, Palette.GlassBorder, shape)
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(56.dp).clip(RoundedCornerShape(50)).background(Color(0x55000000)),
+            contentAlignment = Alignment.Center,
+        ) { ArrowKindIcon(kind, Modifier.size(36.dp)) }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(stringResource(ARROW_NAME[kind]), style = Styles.plain(16, Color.White, FontWeight.Black))
+            Text(stringResource(ARROW_DESC[kind]), style = Styles.plain(12, Palette.TextSecondary, FontWeight.SemiBold))
+            Text(stringResource(R.string.you_have_x, Progress.arrowCount(kind)), style = Styles.plain(12, Palette.Cyan, FontWeight.Bold))
+        }
+        Spacer(Modifier.width(8.dp))
+        val can = Progress.coins >= price
+        Column(
+            Modifier
+                .clip(RoundedCornerShape(14.dp))
+                .background(if (can) Brush.verticalGradient(listOf(Color(0xFF22C55E), Color(0xFF15803D))) else Brush.verticalGradient(listOf(Color(0x33FFFFFF), Color(0x22FFFFFF))))
+                .clickable {
+                    if (Progress.buyArrows(kind, 3, price)) sound.play(Sfx.COIN) else sound.play(Sfx.INVALID)
+                }
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text("×3", style = Styles.plain(15, Color.White, FontWeight.Black))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CoinIcon(Modifier.size(13.dp))
+                Spacer(Modifier.width(3.dp))
+                Text(price.toString(), style = Styles.plain(13, Color.White, FontWeight.Black))
+            }
+        }
+    }
+}

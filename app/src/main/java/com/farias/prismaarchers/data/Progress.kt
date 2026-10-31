@@ -118,6 +118,10 @@ object Progress {
     var rouletteVideoSpins by mutableIntStateOf(0)
         private set
 
+    /** Special arrows in stock, by ArrowKind (index 0 = normal, unused). */
+    var arrowStock by mutableStateOf(List(5) { 0 })
+        private set
+
     // Mechanics already introduced ("new!" notice)
     var seenMechanics by mutableStateOf(setOf<String>())
         private set
@@ -171,6 +175,32 @@ object Progress {
         chestRun = prefs.getInt("chest_run", 0)
         dailyLastDay = prefs.getInt("daily_last_day", 0)
         dailyRun = prefs.getInt("daily_run", 0)
+        // New players start with two of each special arrow.
+        arrowStock = (prefs.getString("arrow_stock", "0,2,2,2,2") ?: "0,2,2,2,2").split(",").mapNotNull { it.toIntOrNull() }
+            .let { if (it.size == 5) it else listOf(0, 2, 2, 2, 2) }
+    }
+
+    // ------------------------------------------------------------------ special arrows
+
+    fun arrowCount(kind: Int): Int = arrowStock.getOrElse(kind) { 0 }
+
+    fun addArrows(kind: Int, n: Int) {
+        if (kind !in 1..4 || n <= 0) return
+        arrowStock = arrowStock.toMutableList().also { it[kind] += n }
+        prefs.edit().putString("arrow_stock", arrowStock.joinToString(",")).apply()
+    }
+
+    fun useArrow(kind: Int): Boolean {
+        if (kind !in 1..4 || arrowCount(kind) <= 0) return false
+        arrowStock = arrowStock.toMutableList().also { it[kind] -= 1 }
+        prefs.edit().putString("arrow_stock", arrowStock.joinToString(",")).apply()
+        return true
+    }
+
+    fun buyArrows(kind: Int, n: Int, price: Int): Boolean {
+        if (!spend(price)) return false
+        addArrows(kind, n)
+        return true
     }
 
     // ------------------------------------------------------------------ coins

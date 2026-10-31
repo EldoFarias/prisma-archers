@@ -20,6 +20,19 @@ import com.farias.prismaarchers.data.Trails
 import com.farias.prismaarchers.data.World
 import java.util.Calendar
 import java.util.TimeZone
+import kotlin.math.exp
+import kotlin.random.Random
+
+/** Weather of a duel (only looks; it doesn't change the physics). */
+object Weather {
+    const val CLEAR = 0
+    const val RAIN = 1
+    const val FOG = 2
+    const val STORM = 3
+}
+
+/** A big title on screen ("DOUBLE HEADSHOT!") with its bonus points (and coins for scenery bonuses). */
+class TitleShow(val id: Int, val textRes: Int, val bonus: Int, val coins: Int)
 
 /**
  * Owns the [ArcheryGame] and mirrors what the UI needs as Compose state. Everything runs on the main
@@ -118,6 +131,40 @@ class GameHost(context: Context) {
     private var endlessPaid = 0
     private var endlessSeed = 0L
     private var shownDuel: Duel? = null
+    private val rnd = Random(System.nanoTime())
+
+    /** Special arrow chosen for the next shot (ArrowKind; NORMAL = none). */
+    var selectedArrow by mutableIntStateOf(ArrowKind.NORMAL)
+        private set
+    /** Last combo title (the UI animates each new id). */
+    var title by mutableStateOf<TitleShow?>(null)
+        private set
+    private var titleId = 0
+    private var titleShot = -1
+    private var headStreak = 0
+    private var longShown = false
+    private var windShown = false
+    /** Speech bubble over an archer (read by the painter). */
+    var bubbleText = ""
+        private set
+    var bubbleAt = -10f
+        private set
+    var bubbleEnemy = true
+        private set
+    /** "Name • Lv 12" shown over the enemy. */
+    var enemyLabel = ""
+        private set
+    /** String resource describing the boss ability (0 = not a boss). */
+    var bossHintRes by mutableIntStateOf(0)
+        private set
+    var weather = Weather.CLEAR
+        private set
+    /** Lightning flash 1 → 0 and where the bolt falls (screen fraction). */
+    var lightning = 0f
+        private set
+    var boltX = 0.5f
+        private set
+    private var nextLightning = 0f
 
     // ------------------------------------------------------------------ looks
 
@@ -137,7 +184,72 @@ class GameHost(context: Context) {
         enemyOutfit = Looks.enemyOutfit(spec.number, spec.boss)
         enemyBow = Looks.enemyBow(spec.number)
         windKmh = game.duel.windKmh()
+        val name = when (spec.power) {
+            BossPower.SHIELD -> "Sir Brann"
+            BossPower.FOCUS -> "Kenji"
+            BossPower.DOUBLE -> "Bjorn"
+            BossPower.HEAL -> "Aldric"
+            else -> NAMES[(spec.number * 7 + (spec.seed % 5).toInt().coerceAtLeast(0)) % NAMES.size]
+        }
+        enemyLabel = name + " • " + app.getString(R.string.lv_x, spec.number)
+        bossHintRes = when (spec.power) {
+            BossPower.SHIELD -> R.string.boss_shield
+            BossPower.FOCUS -> R.string.boss_focus
+            BossPower.DOUBLE -> R.string.boss_double
+            BossPower.HEAL -> R.string.boss_heal
+            else -> 0
+        }
+        weather = if (phase == Phase.MENU) Weather.CLEAR else weatherFor(spec.number, world)
+        nextLightning = game.clock + 3f
+        lightning = 0f
+        bubbleAt = -10f
         lookVersion++
+    }
+
+    private fun weatherFor(n: Int, w: World): Int {
+        val r = ((n * 37 + 11) % 10 + 10) % 10
+        val dry = w.air == 1 || w.scenery == 3 || w.scenery == 2 // snow, volcano, desert: no rain
+        return when {
+            r <= 1 -> if (dry) Weather.FOG else Weather.RAIN
+            r == 2 -> Weather.FOG
+            r == 3 && n >= 12 -> if (dry) Weather.FOG else Weather.STORM
+            else -> Weather.CLEAR
+        }
+    }
+
+    private fun say(enemy: Boolean, options: IntArray, chance: Float, delay: Float = 0f) {
+        if (rnd.nextFloat() > chance) return
+        bubbleText = app.getString(options[rnd.nextInt(options.size)])
+        bubbleEnemy = enemy
+        bubbleAt = game.clock + delay
+    }
+
+    private fun showTitle(res: Int, bonus: Int, coins: Int = 0) {
+        score += bonus
+        if (coins > 0) Progress.addCoins(coins)
+        title = TitleShow(++titleId, res, bonus, coins)
+        sound.play(Sfx.COMBO, 0.8f, 1.1f)
+    }
+
+    // ------------------------------------------------------------------ special arrows
+
+    /** Picks (or drops) a special arrow; false when there are none left of that kind. */
+    fun selectArrow(kind: Int): Boolean {
+        if (selectedArrow == kind) {
+            selectedArrow = ArrowKind.NORMAL
+            return true
+        }
+        if (Progress.arrowCount(kind) <= 0) return false
+        selectedArrow = kind
+        sound.play(Sfx.PICK, 0.8f)
+        return true
+    }
+
+    /** One special arrow of [kind] from a rewarded video, ready to shoot. */
+    fun giveArrow(kind: Int) {
+        Progress.addArrows(kind, 1)
+        selectedArrow = kind
+        sound.play(Sfx.REVIVE, 0.7f)
     }
 
     // ------------------------------------------------------------------ commands
@@ -206,6 +318,12 @@ class GameHost(context: Context) {
         nextOpponentAt = -1f
         myTurn = true
         boss = spec.boss
+        selectedArrow = ArrowKind.NORMAL
+        title = null
+        titleShot = -1
+        headStreak = 0
+        longShown = false
+        windShown = false
         val key = if (endless) -1 else if (daily) -2 else level
         if (key != failsKey) { failsKey = key; failsHere = 0 }
         notice = when {
@@ -221,6 +339,7 @@ class GameHost(context: Context) {
         game.overview = overview
         duelId++
         setOpponent(spec, worldLevel)
+        say(true, if (spec.boss) TAUNT_BOSS else TAUNT_HELLO, if (spec.boss) 1f else 0.4f, 0.9f)
         MusicPlayer.select(MusicPlayer.trackFor(worldLevel, spec.boss || endless))
     }
 
@@ -281,7 +400,11 @@ class GameHost(context: Context) {
             game.cancelAim()
             return
         }
-        game.release(angle, power)
+        val kind = if (selectedArrow != ArrowKind.NORMAL && Progress.arrowCount(selectedArrow) > 0) selectedArrow else ArrowKind.NORMAL
+        if (game.release(angle, power, kind) && kind != ArrowKind.NORMAL) {
+            Progress.useArrow(kind)
+            selectedArrow = ArrowKind.NORMAL
+        }
     }
 
     fun cancelAim() {
@@ -294,6 +417,15 @@ class GameHost(context: Context) {
     fun frame(dt: Float) {
         if (paused) return
         game.update(dt)
+        if (weather == Weather.STORM) {
+            if (game.clock > nextLightning) {
+                lightning = 1f
+                boltX = 0.15f + rnd.nextFloat() * 0.7f
+                nextLightning = game.clock + 5f + rnd.nextFloat() * 7f
+                sound.play(Sfx.BOMB, 0.35f, 0.5f)
+            }
+            lightning *= exp(-dt * 4f)
+        }
         if (phase == Phase.MENU && game.duel !== shownDuel) {
             shownDuel = game.duel
             setOpponent(game.duel.spec, game.duel.spec.number)
@@ -313,6 +445,7 @@ class GameHost(context: Context) {
         game.overview = overview
         duelId++
         setOpponent(spec, 1 + kills * 10)
+        say(true, TAUNT_HELLO, 0.5f, 0.9f)
         sound.play(Sfx.WHOOSH)
     }
 
@@ -324,32 +457,97 @@ class GameHost(context: Context) {
         when (e) {
             is DuelEvent.Shot -> {
                 sound.play(Sfx.SHOOT, 0.9f, if (e.byPlayer) 1f else 0.9f)
+                if (e.kind == ArrowKind.FIRE) sound.play(Sfx.WHOOSH, 0.6f, 0.7f)
                 if (e.byPlayer) haptic(Haptic.TICK)
                 myTurn = false
             }
             is DuelEvent.Hit -> {
                 val head = e.part == Part.HEAD
                 sound.play(if (head) Sfx.HEADSHOT else Sfx.HIT, 1f, 0.92f + (Math.random() * 0.16).toFloat())
+                if (e.kind == ArrowKind.ICE) sound.play(Sfx.GLASS, 0.7f, 1.5f)
                 if (e.byPlayer) {
                     hits++
                     if (head) { heads++; headsThisDuel++ }
                     if (duel.spec.distance >= LONG_SHOT) longHits++
                     score += e.damage + if (head) HEAD_BONUS else 0
-                    haptic(if (e.kill) Haptic.COMBO else Haptic.PLACE)
+                    haptic(when {
+                        e.kill -> Haptic.HEAVY
+                        head -> Haptic.COMBO
+                        e.part == Part.TORSO -> Haptic.CLEAR
+                        else -> Haptic.PLACE
+                    })
+                    playerHitTitle(e, head)
+                    if (!e.kill && duel.enemy.alive) say(true, TAUNT_OUCH, 0.35f, 0.3f)
                 } else {
                     if (e.damage > 0) tookDamage = true
                     if (e.damage == 0 && shields > 0) shields--
                     haptic(Haptic.HEAVY)
+                    if (e.damage > 0 && !e.kill) say(true, TAUNT_HIT, 0.5f, 0.2f)
                 }
                 if (e.kill) sound.play(Sfx.COMBO, 0.7f)
             }
-            is DuelEvent.Miss -> if (e.ground) sound.play(Sfx.STICK, 0.7f)
+            is DuelEvent.Miss -> {
+                if (e.ground) sound.play(Sfx.STICK, 0.7f)
+                if (e.byPlayer) {
+                    if (titleShot != duel.shotsFired) headStreak = 0
+                    say(true, TAUNT_DODGE, 0.45f, 0.2f)
+                } else {
+                    say(true, TAUNT_MISS, 0.35f, 0.2f)
+                }
+            }
             is DuelEvent.TurnStart -> {
                 myTurn = e.player
                 if (!e.player) sound.play(Sfx.DRAW, 0.45f, 0.9f)
             }
+            is DuelEvent.Explode -> {
+                sound.play(Sfx.BOMB, 1f)
+                haptic(Haptic.HEAVY)
+                if (e.byPlayer && e.damage > 0) {
+                    hits++
+                    score += e.damage
+                }
+                if (e.byPlayer && e.kill && titleShot != duel.shotsFired) {
+                    titleShot = duel.shotsFired
+                    showTitle(R.string.title_boom, 75)
+                }
+            }
+            is DuelEvent.HelmetOff -> {
+                sound.play(Sfx.HEADSHOT, 0.9f, 1.4f)
+                showTitle(R.string.title_helmet, 40)
+            }
+            is DuelEvent.ShieldHit -> {
+                sound.play(Sfx.GLASS, 0.9f, if (e.left == 0) 0.8f else 1.2f)
+                haptic(Haptic.CLEAR)
+                if (e.left > 0) say(true, TAUNT_DODGE, 0.6f, 0.2f)
+            }
+            is DuelEvent.Frozen -> sound.play(Sfx.GLASS, 0.8f, 1.6f)
+            is DuelEvent.Thaw -> sound.play(Sfx.GLASS, 0.6f, 0.9f)
+            is DuelEvent.Heal -> sound.play(Sfx.REVIVE, 0.6f, 1.3f)
+            is DuelEvent.Bonus -> {
+                sound.play(Sfx.COIN, 1f, 1.2f)
+                if (e.kind == Prop.BIRD) showTitle(R.string.title_bird, 25, BIRD_COINS)
+                else showTitle(R.string.title_balloon, 25, BALLOON_COINS)
+            }
             is DuelEvent.Over -> onOver(e.playerWon)
         }
+    }
+
+    /** One title per shot, the best one that applies. */
+    private fun playerHitTitle(e: DuelEvent.Hit, head: Boolean) {
+        val duel = game.duel
+        val shot = duel.shotsFired
+        if (head && e.damage >= 100) headStreak++ else if (titleShot != shot) headStreak = 0
+        if (titleShot == shot) return
+        when {
+            e.kill && shot == 1 -> showTitle(R.string.title_one_shot, 150)
+            head && headStreak >= 3 -> showTitle(R.string.title_triple_head, 200)
+            head && headStreak == 2 -> showTitle(R.string.title_double_head, 100)
+            e.pierce -> showTitle(R.string.title_pierce, 75)
+            duel.spec.distance >= LONG_SHOT && !longShown -> { longShown = true; showTitle(R.string.title_long, 50) }
+            duel.spec.wind <= -1.5f && !windShown -> { windShown = true; showTitle(R.string.title_wind, 50) }
+            else -> return
+        }
+        titleShot = shot
     }
 
     private fun onOver(won: Boolean) {
@@ -426,6 +624,15 @@ class GameHost(context: Context) {
         const val HEAD_BONUS = 50
         const val WIN_BONUS = 100
         const val LONG_SHOT = 24f
+        const val BIRD_COINS = 5
+        const val BALLOON_COINS = 10
+        private val NAMES = arrayOf("Rolf", "Kira", "Bruno", "Yuki", "Ragnar", "Zara", "Igor", "Luna", "Hugo", "Nina", "Taro", "Vex", "Dante", "Mila", "Orion", "Sasha", "Fenn", "Ivy")
+        private val TAUNT_HELLO = intArrayOf(R.string.taunt_hello_1, R.string.taunt_hello_2, R.string.taunt_hello_3)
+        private val TAUNT_BOSS = intArrayOf(R.string.taunt_boss_1, R.string.taunt_boss_2, R.string.taunt_boss_3)
+        private val TAUNT_HIT = intArrayOf(R.string.taunt_hit_1, R.string.taunt_hit_2, R.string.taunt_hit_3)
+        private val TAUNT_MISS = intArrayOf(R.string.taunt_miss_1, R.string.taunt_miss_2, R.string.taunt_miss_3)
+        private val TAUNT_DODGE = intArrayOf(R.string.taunt_dodge_1, R.string.taunt_dodge_2, R.string.taunt_dodge_3)
+        private val TAUNT_OUCH = intArrayOf(R.string.taunt_ouch_1, R.string.taunt_ouch_2, R.string.taunt_ouch_3)
 
         /** Local calendar day number (same challenge for everyone on the same date). */
         fun dayIndex(): Int {

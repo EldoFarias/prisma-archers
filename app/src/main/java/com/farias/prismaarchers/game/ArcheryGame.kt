@@ -1,17 +1,35 @@
 package com.farias.prismaarchers.game
 
 import kotlin.math.abs
-import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.exp
-import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.math.sqrt
 import kotlin.random.Random
 
-/** A floating text in world space ("-34", "HEADSHOT!"). */
+/** A floating text in world space ("-34", "HEADSHOT!", "+12"). kind: 0 damage, 1 head, 2 HEADSHOT, 3 heal. */
 class WorldText(val text: String, val x: Float, val y: Float, val kind: Int, val born: Float)
+
+/** Something in the scenery worth a bonus: a bird crossing the sky or a balloon drifting up. */
+class Prop(val kind: Int, var x: Float, var y: Float, var vx: Float, var vy: Float, val phase: Float) {
+    var alive = true
+    var gone = false
+    var spin = 0f
+
+    companion object {
+        const val BIRD = 0
+        const val BALLOON = 1
+    }
+}
+
+/** The helmet knocked off the enemy's head, tumbling. */
+class Debris {
+    var active = false
+    var x = 0f; var y = 0f; var vx = 0f; var vy = 0f; var rot = 0f; var vr = 0f
+    var resting = false
+}
 
 /**
  * Everything the game view shows: the duel, the camera, slow motion and effects. Updated once per
@@ -44,14 +62,30 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
     /** White flash on a headshot kill (1 → 0). */
     var flash = 0f
         private set
+    /** Orange flash of an explosion (1 → 0). */
+    var blastFlash = 0f
+        private set
     /** "Panorama": the camera pulls back to show both archers. */
     var overview = false
     /** Opening pan: the camera starts on the enemy, then glides to the player. */
     private var introUntil = -1f
     val inIntro: Boolean get() = clock < introUntil
+    /** Kill cam: 0..1 (letterbox bars, zoom on the arrow). */
+    var killCam = 0f
+        private set
+    private var killCamOn = false
+    private var killArrow: Arrow? = null
+    /** Burning (fire arrow) until this clock time, per side. */
+    var enemyBurnUntil = -1f
+        private set
+    var playerBurnUntil = -1f
+        private set
 
     val particles = Particles(900)
     val texts = ArrayList<WorldText>()
+    val props = ArrayList<Prop>()
+    val helmet = Debris()
+    val recorder = Recorder()
     private val events = ArrayList<DuelEvent>()
     private val rnd = Random(System.nanoTime())
 
@@ -62,9 +96,6 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         private set
     var aimPower = 0f
         private set
-    /** Arrow look of each side (trail colour etc.). */
-    var playerTrail = 0
-    var enemyTrail = 0
 
     private var demoWait = 0f
     private var demoPlan = 0.3f to 0.6f
@@ -88,6 +119,9 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         slow = 0f
         slowUntil = -1f
         overWait = -1f
+        killCamOn = false
+        killArrow = null
+        recorder.reset()
         burst(duel.player.x[Ragdoll.CHEST], duel.player.y[Ragdoll.CHEST], 40, REVIVE_SPARK, 4f)
     }
 
@@ -100,6 +134,9 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         duel = d
         particles.clear()
         texts.clear()
+        props.clear()
+        helmet.active = false
+        recorder.reset()
         slow = 0f
         slowUntil = -1f
         shake = 0f
@@ -107,6 +144,12 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         aimPower = 0f
         overWait = -1f
         flash = 0f
+        blastFlash = 0f
+        killCam = 0f
+        killCamOn = false
+        killArrow = null
+        enemyBurnUntil = -1f
+        playerBurnUntil = -1f
         overview = false
         camX = d.player.rootX + VIEW_W * 0.28f
         camY = d.player.rootY + 1.6f
@@ -117,6 +160,7 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
             camY = d.enemy.rootY + 1.6f
             viewW = VIEW_W * 1.15f
             introUntil = clock + 1.1f
+            maybeSpawnProp()
         } else {
             introUntil = -1f
         }
@@ -132,13 +176,15 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         duel.aimPlayer(angle, power)
     }
 
-    fun release(angle: Float, power: Float) {
-        if (mode != Mode.PLAY) return
+    /** Shoots; returns true when the arrow (of [kind]) actually went off. */
+    fun release(angle: Float, power: Float, kind: Int = ArrowKind.NORMAL): Boolean {
+        if (mode != Mode.PLAY) return false
         aiming = false
         events.clear()
-        duel.releasePlayer(angle, power, events)
+        val ok = duel.releasePlayer(angle, power, events, kind)
         aimPower = 0f
         handle(events)
+        return ok
     }
 
     fun cancelAim() {
@@ -152,9 +198,9 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
     fun update(realDt: Float) {
         val rd = realDt.coerceIn(0f, 1f / 20f)
         clock += rd
-        val target = if (clock < slowUntil) 1f else 0f
+        val target = if (clock < slowUntil || killCamOn) 1f else 0f
         slow += (target - slow) * min(1f, rd * 10f)
-        val dt = rd * (1f - 0.78f * slow)
+        val dt = rd * (1f - (if (killCamOn) 0.84f else 0.78f) * slow)
         if (mode == Mode.DEMO) demoBrain(dt)
         // Fixed sub-steps for stable physics.
         var left = dt
@@ -163,19 +209,50 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
             events.clear()
             duel.step(h, events)
             handle(events)
+            stepProps(h)
             left -= h
         }
+        stepHelmet(dt)
+        burning(duel.enemy, enemyBurnUntil)
+        burning(duel.player, playerBurnUntil)
         dust(duel.player)
         dust(duel.enemy)
         particles.update(dt)
         texts.removeAll { clock - it.born > 1.4f }
         shake *= exp(-rd * 8f)
         flash *= exp(-rd * 5f)
+        blastFlash *= exp(-rd * 6f)
+        updateKillCam(rd)
         updateCamera(rd)
+        if (mode == Mode.PLAY) recorder.record(this, rd)
         if (mode == Mode.DEMO && duel.finished) {
             if (overWait < 0f) overWait = clock
             if (clock - overWait > 1.5f) startDemo()
         }
+    }
+
+    /** Turns the kill cam on when an arrow in the air is about to land a killing blow. */
+    private fun updateKillCam(rd: Float) {
+        val d = duel
+        if (mode == Mode.PLAY && !killCamOn && d.turn != Duel.Turn.OVER) {
+            for (a in d.inFlight) {
+                if (d.predictKill(a, 0.55f)) {
+                    killCamOn = true
+                    killArrow = a
+                    break
+                }
+            }
+        }
+        if (killCamOn) {
+            val a = killArrow
+            val missed = d.turn != Duel.Turn.OVER && (a == null || a !in d.inFlight)
+            if (missed || (d.turn == Duel.Turn.OVER && clock > slowUntil)) {
+                killCamOn = false
+                killArrow = null
+            }
+        }
+        val t = if (killCamOn) 1f else 0f
+        killCam += (t - killCam) * min(1f, rd * 6f)
     }
 
     /** In the menu demo the player side is a bot too. */
@@ -205,13 +282,113 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         r.thud = 0f
     }
 
+    /** Little flames rising from a body hit by a fire arrow. */
+    private fun burning(r: Ragdoll, until: Float) {
+        if (clock > until) return
+        repeat(2) {
+            val i = if (rnd.nextBoolean()) Ragdoll.CHEST else Ragdoll.PELVIS
+            val c = if (rnd.nextFloat() < 0.5f) FIRE_A else FIRE_B
+            particles.add(r.x[i] + (rnd.nextFloat() - 0.5f) * 0.3f, r.y[i] + (rnd.nextFloat() - 0.5f) * 0.3f, (rnd.nextFloat() - 0.5f) * 0.6f, 1.5f + rnd.nextFloat() * 1.5f, c[0], c[1], c[2], 0.04f + rnd.nextFloat() * 0.05f, 0.35f + rnd.nextFloat() * 0.3f)
+        }
+    }
+
+    // ------------------------------------------------------------------ scenery bonuses
+
+    /** Sometimes a bird crosses the sky or a balloon drifts up between the archers. */
+    private fun maybeSpawnProp() {
+        if (mode != Mode.PLAY || props.count { it.alive } >= 2) return
+        if (rnd.nextFloat() > 0.45f) return
+        val d = duel
+        val midY = (d.player.rootY + d.enemy.rootY) / 2f
+        if (rnd.nextFloat() < 0.6f) {
+            val fromLeft = rnd.nextBoolean()
+            val x = if (fromLeft) -6f else d.spec.distance + 6f
+            val sp = (1.6f + rnd.nextFloat() * 1.4f) * (if (fromLeft) 1f else -1f)
+            props.add(Prop(Prop.BIRD, x, midY + 4f + rnd.nextFloat() * 4f, sp, 0f, rnd.nextFloat() * 6f))
+        } else {
+            val x = d.spec.distance * (0.3f + rnd.nextFloat() * 0.4f)
+            props.add(Prop(Prop.BALLOON, x, midY - 3f, 0f, 0.45f + rnd.nextFloat() * 0.25f, rnd.nextFloat() * 6f))
+        }
+    }
+
+    private fun stepProps(dt: Float) {
+        if (props.isEmpty()) return
+        val d = duel
+        for (p in props) {
+            if (p.gone) continue
+            if (p.alive) {
+                p.x += p.vx * dt
+                p.y += p.vy * dt + (if (p.kind == Prop.BIRD) sin(clock * 2f + p.phase) * 0.004f else 0f)
+                if (p.kind == Prop.BALLOON) p.x += sin(clock * 0.8f + p.phase) * 0.003f
+                // Player arrows in the air pop it.
+                for (a in d.inFlight) {
+                    if (!a.byPlayer) continue
+                    val tx = a.x + cos(a.angle) * 0.3f
+                    val ty = a.y + sin(a.angle) * 0.3f
+                    val r = if (p.kind == Prop.BIRD) 0.42f else 0.5f
+                    val dx = tx - p.x
+                    val dy = ty - (p.y + if (p.kind == Prop.BALLOON) 0.15f else 0f)
+                    if (dx * dx + dy * dy < r * r) {
+                        p.alive = false
+                        if (p.kind == Prop.BIRD) {
+                            p.vx = a.vx * 0.15f
+                            p.vy = 1.5f
+                            burst(p.x, p.y, 24, FEATHER, 3f)
+                        } else {
+                            burst(p.x, p.y + 0.15f, 40, BALLOON_C, 5f)
+                            p.gone = true
+                        }
+                        val e = DuelEvent.Bonus(p.kind, p.x, p.y)
+                        if (mode == Mode.PLAY) listener(e)
+                        break
+                    }
+                }
+                if (abs(p.x - d.spec.distance / 2f) > d.spec.distance / 2f + 10f || p.y > 25f) p.gone = true
+            } else {
+                // Shot bird tumbling down.
+                p.vy -= GRAVITY * dt
+                p.x += p.vx * dt
+                p.y += p.vy * dt
+                p.spin += dt * 9f
+                if (p.y < -30f) p.gone = true
+            }
+        }
+        props.removeAll { it.gone }
+    }
+
+    private fun stepHelmet(dt: Float) {
+        val h = helmet
+        if (!h.active || h.resting) return
+        h.vy -= GRAVITY * dt
+        h.x += h.vx * dt
+        h.y += h.vy * dt
+        h.rot += h.vr * dt
+        for (p in duel.platforms) {
+            if (h.x in p.x0..p.x1 && h.y < p.top + 0.12f && h.y > p.top - 1f && h.vy < 0f) {
+                h.y = p.top + 0.12f
+                h.vy = -h.vy * 0.35f
+                h.vx *= 0.6f
+                h.vr *= 0.5f
+                if (abs(h.vy) < 0.6f) { h.resting = true; h.rot = 180f }
+            }
+        }
+        if (h.y < -30f) h.active = false
+    }
+
     private fun updateCamera(dt: Float) {
         val d = duel
         val a = d.flying
         var tx: Float
         var ty: Float
         var tw = VIEW_W
+        val ka = killArrow
         when {
+            killCamOn && d.turn != Duel.Turn.OVER && ka != null -> {
+                // Kill cam: tight on the arrow.
+                tx = ka.x + ka.vx * 0.05f
+                ty = ka.y + 0.2f
+                tw = VIEW_W * 0.6f
+            }
             clock < introUntil -> {
                 tx = d.enemy.rootX - VIEW_W * 0.2f
                 ty = d.enemy.rootY + 1.6f
@@ -246,15 +423,16 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
                 ty = d.player.rootY + 1.6f
             }
         }
-        if (slow > 0.05f && d.turn == Duel.Turn.OVER) tw = VIEW_W * (1f - 0.3f * slow)
+        if (slow > 0.05f && d.turn == Duel.Turn.OVER) tw = VIEW_W * (if (killCam > 0.1f) 0.65f else 1f - 0.3f * slow)
         val k = when {
+            killCamOn -> min(1f, dt * 12f)
             overview -> min(1f, dt * 4f)
             a != null -> min(1f, dt * 9f)
             else -> min(1f, dt * 3.2f)
         }
         camX += (tx - camX) * k
         camY += (ty - camY) * k
-        viewW += (tw - viewW) * min(1f, dt * if (overview) 3.5f else 4f)
+        viewW += (tw - viewW) * min(1f, dt * if (killCamOn) 5f else if (overview) 3.5f else 4f)
     }
 
     // ------------------------------------------------------------------ events → effects
@@ -265,17 +443,57 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
                 is DuelEvent.Hit -> {
                     val c = if (e.part == Part.HEAD) HEAD_SPARK else HIT_SPARK
                     burst(e.x, e.y, if (e.kill) 60 else 26, c, if (e.kill) 6f else 4f)
+                    if (e.pierce) burst(e.x, e.y, 30, HEAD_SPARK, 8f)
                     shake = max(shake, if (e.kill) 0.5f else 0.25f)
-                    texts.add(WorldText("-${e.damage}", e.x, e.y + 0.4f, if (e.part == Part.HEAD) 1 else 0, clock))
+                    if (e.damage > 0) texts.add(WorldText("-${e.damage}", e.x, e.y + 0.4f, if (e.part == Part.HEAD) 1 else 0, clock))
                     if (e.part == Part.HEAD && e.damage >= 100) {
                         texts.add(WorldText("HEADSHOT", e.x, e.y + 0.9f, 2, clock))
                         flash = 1f
                     }
-                    if (e.kill || (e.part == Part.HEAD && e.byPlayer)) {
-                        slowUntil = clock + if (e.kill) 1.3f else 0.6f
+                    if (e.kind == ArrowKind.FIRE) {
+                        burst(e.x, e.y, 30, FIRE_A, 4f)
+                        if (e.byPlayer) enemyBurnUntil = clock + 2.5f else playerBurnUntil = clock + 2.5f
                     }
+                    if (e.kind == ArrowKind.ICE) burst(e.x, e.y, 30, ICE_C, 3.5f)
+                    if (e.kill || (e.part == Part.HEAD && e.byPlayer)) {
+                        slowUntil = clock + if (e.kill) 1.4f else 0.6f
+                    }
+                    if (e.kill) recorder.markKill()
                 }
                 is DuelEvent.Miss -> if (e.ground) burst(e.x, e.y, 14, DUST, 2.5f)
+                is DuelEvent.Explode -> {
+                    burst(e.x, e.y, 70, FIRE_A, 7f)
+                    burst(e.x, e.y, 40, FIRE_B, 5f)
+                    burst(e.x, e.y, 30, SMOKE, 3f)
+                    shake = max(shake, 0.9f)
+                    blastFlash = 1f
+                    if (e.damage > 0) texts.add(WorldText("-${e.damage}", e.x, e.y + 0.6f, 0, clock))
+                    if (e.kill) {
+                        slowUntil = clock + 1.4f
+                        recorder.markKill()
+                    }
+                }
+                is DuelEvent.HelmetOff -> {
+                    helmet.active = true
+                    helmet.resting = false
+                    helmet.x = e.x; helmet.y = e.y; helmet.vx = e.vx; helmet.vy = e.vy
+                    helmet.rot = 0f
+                    helmet.vr = 520f * (if (e.vx > 0f) 1f else -1f)
+                    burst(e.x, e.y, 24, METAL, 5f)
+                    shake = max(shake, 0.35f)
+                }
+                is DuelEvent.ShieldHit -> {
+                    burst(e.x, e.y, 40, SHIELD_C, 5f)
+                    shake = max(shake, 0.3f)
+                    if (e.left == 0) burst(duel.enemy.x[Ragdoll.CHEST], duel.enemy.y[Ragdoll.CHEST], 60, SHIELD_C, 6f)
+                }
+                is DuelEvent.Frozen -> burst(e.x, e.y, 40, ICE_C, 3f)
+                is DuelEvent.Thaw -> burst(e.x, e.y, 30, ICE_C, 2.5f)
+                is DuelEvent.Heal -> {
+                    texts.add(WorldText("+${e.amount}", e.x, e.y, 3, clock))
+                    burst(e.x, e.y - 0.4f, 24, HEAL_C, 2f)
+                }
+                is DuelEvent.TurnStart -> if (e.player) maybeSpawnProp()
                 else -> Unit
             }
             if (mode == Mode.PLAY) listener(e)
@@ -303,6 +521,99 @@ class ArcheryGame(private val listener: (DuelEvent) -> Unit) {
         val HEAD_SPARK = floatArrayOf(1f, 0.85f, 0.3f)
         val DUST = floatArrayOf(0.85f, 0.75f, 0.6f)
         val REVIVE_SPARK = floatArrayOf(0.5f, 1f, 0.7f)
+        val FIRE_A = floatArrayOf(1f, 0.55f, 0.1f)
+        val FIRE_B = floatArrayOf(1f, 0.85f, 0.25f)
+        val SMOKE = floatArrayOf(0.35f, 0.33f, 0.35f)
+        val ICE_C = floatArrayOf(0.65f, 0.92f, 1f)
+        val METAL = floatArrayOf(0.85f, 0.88f, 0.92f)
+        val SHIELD_C = floatArrayOf(0.5f, 0.85f, 1f)
+        val HEAL_C = floatArrayOf(0.45f, 1f, 0.55f)
+        val FEATHER = floatArrayOf(0.95f, 0.95f, 0.98f)
+        val BALLOON_C = floatArrayOf(1f, 0.3f, 0.45f)
+    }
+}
+
+/**
+ * Keeps the last few seconds of the duel (bodies, arrows, camera) at 30 fps, so the killing blow can
+ * be replayed on the victory screen. Fixed arrays: no allocations while recording.
+ */
+class Recorder {
+    val pX = FloatArray(CAP * Ragdoll.N); val pY = FloatArray(CAP * Ragdoll.N)
+    val eX = FloatArray(CAP * Ragdoll.N); val eY = FloatArray(CAP * Ragdoll.N)
+    val alive = BooleanArray(CAP * 2)
+    val cam = FloatArray(CAP * 3)
+    val ax = FloatArray(CAP * ARROWS); val ay = FloatArray(CAP * ARROWS); val aa = FloatArray(CAP * ARROWS)
+    val aKind = IntArray(CAP * ARROWS)
+    val aCount = IntArray(CAP)
+    val helmetOn = BooleanArray(CAP)
+    /** Frames written so far (frame f lives at f % CAP). */
+    var frames = 0
+        private set
+    var killFrame = -1
+        private set
+    private var acc = 0f
+    private var afterKill = 0f
+
+    fun reset() { frames = 0; killFrame = -1; acc = 0f; afterKill = 0f }
+
+    fun markKill() { if (killFrame < 0) killFrame = frames }
+
+    /** True once enough has been recorded after the kill. */
+    val ready: Boolean get() = killFrame >= 0 && afterKill > AFTER
+
+    fun record(g: ArcheryGame, rd: Float) {
+        if (killFrame >= 0) {
+            afterKill += rd
+            if (afterKill > AFTER) return
+        }
+        acc += rd
+        if (acc < 1f / 30f) return
+        acc -= 1f / 30f
+        val i = frames % CAP
+        val d = g.duel
+        System.arraycopy(d.player.x, 0, pX, i * Ragdoll.N, Ragdoll.N)
+        System.arraycopy(d.player.y, 0, pY, i * Ragdoll.N, Ragdoll.N)
+        System.arraycopy(d.enemy.x, 0, eX, i * Ragdoll.N, Ragdoll.N)
+        System.arraycopy(d.enemy.y, 0, eY, i * Ragdoll.N, Ragdoll.N)
+        alive[i * 2] = d.player.alive
+        alive[i * 2 + 1] = d.enemy.alive
+        cam[i * 3] = g.camX; cam[i * 3 + 1] = g.camY; cam[i * 3 + 2] = g.viewW
+        helmetOn[i] = d.helmetOn
+        var n = 0
+        // Arrows in the air first, then the newest stuck in bodies.
+        for (a in d.inFlight) {
+            if (n == ARROWS) break
+            put(i, n++, a)
+        }
+        var k = d.arrows.size - 1
+        while (k >= 0 && n < ARROWS) {
+            val a = d.arrows[k]
+            if (a.stuckIn != null || (!a.flying && a.stuckTime >= 0f)) put(i, n++, a)
+            k--
+        }
+        aCount[i] = n
+        frames++
+    }
+
+    private fun put(i: Int, n: Int, a: Arrow) {
+        val j = i * ARROWS + n
+        ax[j] = a.x; ay[j] = a.y; aa[j] = a.angle
+        aKind[j] = if (a.byPlayer) a.kind else -1
+    }
+
+    /** First and last frame of the replay clip (inclusive), or null. */
+    fun clip(): IntArray? {
+        if (killFrame < 0) return null
+        val first = max(max(0, frames - CAP), killFrame - BEFORE)
+        return intArrayOf(first, frames - 1)
+    }
+
+    companion object {
+        const val CAP = 160
+        const val ARROWS = 8
+        /** Frames before the kill shown in the replay (≈1.7 s) and seconds kept after it. */
+        const val BEFORE = 50
+        const val AFTER = 2.2f
     }
 }
 

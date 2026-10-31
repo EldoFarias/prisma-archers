@@ -34,6 +34,11 @@ import com.farias.prismaarchers.data.Outfit
 import com.farias.prismaarchers.data.Trails
 import com.farias.prismaarchers.data.World
 import com.farias.prismaarchers.game.Arrow
+import com.farias.prismaarchers.game.ArrowKind
+import com.farias.prismaarchers.game.Debris
+import com.farias.prismaarchers.game.Prop
+import com.farias.prismaarchers.game.Recorder
+import com.farias.prismaarchers.game.Weather
 import com.farias.prismaarchers.game.Duel
 import com.farias.prismaarchers.game.GameHost
 import com.farias.prismaarchers.game.Ragdoll
@@ -128,12 +133,15 @@ class ArcheryPainter {
     private val guide = FloatArray(80)
 
     // Text layouts cache
-    private val texts = arrayOf(HashMap<String, TextLayoutResult>(), HashMap(), HashMap(), HashMap())
+    private val texts = Array(7) { HashMap<String, TextLayoutResult>() }
     private var distInt = -1
     private var distStr = ""
     private val textStyleSmall = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.Black, color = Color.White, shadow = Shadow(Color(0xCC000000), Offset(0f, 2f), 4f))
     private val textStyleDmg = TextStyle(fontSize = 24.sp, fontWeight = FontWeight.Black, color = Color.White, shadow = Shadow(Color(0xCC000000), Offset(0f, 2f), 5f))
     private val textStyleHead = TextStyle(fontSize = 30.sp, fontWeight = FontWeight.Black, color = Color(0xFFFFD34D), shadow = Shadow(Color(0xCC000000), Offset(0f, 2f), 6f))
+    private val textStyleHeal = TextStyle(fontSize = 24.sp, fontWeight = FontWeight.Black, color = Color(0xFF4ADE80), shadow = Shadow(Color(0xCC000000), Offset(0f, 2f), 5f))
+    private val textStyleLabel = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, color = Color.White, shadow = Shadow(Color(0xDD000000), Offset(0f, 1.5f), 4f))
+    private val textStyleBubble = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF1A1226))
     private val textStyleBig = TextStyle(fontSize = 34.sp, fontWeight = FontWeight.Black, color = Color(0xFFFF8A2B), shadow = Shadow(Color(0xDD000000), Offset(0f, 3f), 8f))
 
     private var strokeW = -1f
@@ -153,7 +161,7 @@ class ArcheryPainter {
     }
 
     private fun layout(m: TextMeasurer, text: String, style: TextStyle): TextLayoutResult {
-        val map = texts[when (style) { textStyleSmall -> 0; textStyleDmg -> 1; textStyleHead -> 2; else -> 3 }]
+        val map = texts[when (style) { textStyleSmall -> 0; textStyleDmg -> 1; textStyleHead -> 2; textStyleBig -> 3; textStyleHeal -> 4; textStyleLabel -> 5; else -> 6 }]
         map[text]?.let { return it }
         if (map.size > 60) map.clear()
         return m.measure(text, style).also { map[text] = it }
@@ -184,13 +192,25 @@ class ArcheryPainter {
         val sh = g.shake * kk * 0.12f
         setTransform(g.camX, g.camY, kk, w / 2f + sin(g.clock * 53f) * sh, h * 0.56f + cos(g.clock * 47f) * sh)
         if (world !== sceneWorld || w != sceneW || h != sceneH) buildScene(world, w, h)
+        val weather = host.weather
 
         drawSky(d, w, h, g.clock, world, host.windKmh)
-        // Platforms
-        for (p in duel.platforms) drawPlatform(d, p.x0, p.x1, p.top, h, world)
+        if (weather == Weather.STORM || weather == Weather.RAIN) d.drawRect(if (weather == Weather.STORM) Color(0x552A3348) else Color(0x33202A40))
+        if (host.lightning > 0.02f) d.drawRect(Color(0xFFE0E7FF), alpha = (host.lightning * 0.35f).coerceAtMost(1f))
+        if (host.lightning > 0.45f) bolt(d, w, h, host.boltX)
+        // Birds and balloons
+        for (p in g.props) drawProp(d, p, g.clock)
+        // Platforms with their flags (and torches at night)
+        val torches = world.air == 4 || world.scenery == 3 || world.scenery == 4
+        for ((i, p) in duel.platforms.withIndex()) {
+            drawPlatform(d, p.x0, p.x1, p.top, h, world)
+            val fx = if (i == 0) p.x0 + 0.55f else p.x1 - 0.55f
+            flag(d, fx, p.top, duel.spec.wind, g.clock, if (i == 0) Color(0xFF34D399) else Color(0xFFF43F5E))
+            if (torches) torch(d, if (i == 0) p.x1 - 0.25f else p.x0 + 0.25f, p.top, g.clock + i * 1.7f)
+        }
         // Arrows in the ground / bodies
         for (a in duel.arrows) {
-            if (a === duel.flying) continue
+            if (a.flying) continue
             var ang = a.angle
             var axw = a.x
             var ayw = a.y
@@ -205,23 +225,27 @@ class ArcheryPainter {
                     ayw = tipY - sin(ang) * 0.36f
                 }
             }
-            drawArrow(d, axw, ayw, ang, a.byPlayer, if (a.byPlayer) host.playerBow else host.enemyBow, 1f)
+            drawArrow(d, axw, ayw, ang, a.byPlayer, if (a.byPlayer) host.playerBow else host.enemyBow, 1f, a.kind, g.clock)
         }
         // Archers
-        val enemyHelmet = duel.spec.enemyHelmet
-        drawArcher(d, duel.enemy, host.enemyOutfit, host.enemyBow, enemyHelmet, duel.turn == Duel.Turn.ENEMY && duel.enemy.alive, g.clock)
-        drawArcher(d, duel.player, host.playerOutfit, host.playerBow, false, duel.turn == Duel.Turn.PLAYER && duel.player.alive, g.clock)
-        // Flying arrow + trail
+        drawArcher(d, duel.enemy, host.enemyOutfit, host.enemyBow, duel.helmetOn, duel.turn == Duel.Turn.ENEMY && duel.enemy.alive, g.clock)
+        if (duel.enemyFrozen) iceBlock(d, duel.enemy, g.clock)
+        if (duel.bossShield > 0 && duel.enemy.alive) shieldBubble(d, duel.enemy, duel.bossShield, g.clock)
+        drawArcher(d, duel.player, host.playerOutfit, host.playerBow, false, duel.turn == Duel.Turn.PLAYER && duel.player.alive, g.clock, host.selectedArrow)
+        // Arrows in the air (+ trail of the lead one)
         val fl = duel.flying
         if (fl != null) {
             if (fl !== trailOwner) { trailOwner = fl; trailN = 0 }
             pushTrail(fl.x, fl.y)
-            drawTrail(d, if (fl.byPlayer) host.trailStyle else Trails.CLASSIC, if (fl.byPlayer) host.playerBow.trail else 0xFF9A9A, g.clock)
-            drawArrow(d, fl.x, fl.y, fl.angle, fl.byPlayer, if (fl.byPlayer) host.playerBow else host.enemyBow, 1f)
+            val style = if (!fl.byPlayer) Trails.CLASSIC else if (fl.kind == ArrowKind.FIRE) FIRE_TRAIL else host.trailStyle
+            drawTrail(d, style, if (fl.byPlayer) host.playerBow.trail else 0xFF9A9A, g.clock)
         } else if (trailN > 0) {
             trailN = max(0, trailN - 2)
             drawTrail(d, host.trailStyle, host.playerBow.trail, g.clock)
         }
+        for (a in duel.inFlight) drawArrow(d, a.x, a.y, a.angle, a.byPlayer, if (a.byPlayer) host.playerBow else host.enemyBow, 1f, a.kind, g.clock)
+        // Helmet knocked off
+        if (g.helmet.active) helmetDebris(d, g.helmet)
         // Aim guide
         if (g.aiming && g.aimPower > 0.04f && duel.turn == Duel.Turn.PLAYER) {
             val n = g.guide(guide)
@@ -245,7 +269,7 @@ class ArcheryPainter {
             val deg = Math.round(Math.toDegrees(g.aimAngle.toDouble())).toInt()
             val pct = Math.round(g.aimPower * 100f)
             val t = layout(m, "$deg°  $pct%", textStyleSmall)
-            d.drawText(t, topLeft = Offset(sx(pl.rootX) - t.size.width / 2f, sy(pl.rootY + 2.55f) - t.size.height))
+            d.drawText(t, topLeft = Offset(sx(pl.rootX) - t.size.width / 2f, sy(pl.rootY + 2.55f) - t.size.height - gr * 0.15f))
         }
         // Particles
         val pt = g.particles
@@ -255,13 +279,35 @@ class ArcheryPainter {
             if (r < 0.5f) continue
             d.drawCircle(Color(pt.r[i], pt.g[i], pt.b[i], a), r, Offset(sx(pt.x[i]), sy(pt.y[i])))
         }
-        // HP bars
-        hpBar(d, duel.player, duel.playerHp, duel.maxPlayerHp, Color(0xFF34D399), duel.turn == Duel.Turn.PLAYER, g.clock, host.shields)
-        hpBar(d, duel.enemy, duel.enemyHp, duel.maxEnemyHp, Color(0xFFF43F5E), false, g.clock, 0)
+        // Rain and fog in front
+        if (weather == Weather.RAIN || weather == Weather.STORM) rain(d, w, h, g.clock, host.windKmh, weather == Weather.STORM)
+        if (weather == Weather.FOG) fog(d, w, h, g.clock, world)
+        // HP bars (with the lost chunk draining behind) and the enemy's name
+        val dtc = (g.clock - lastClock).coerceIn(0f, 0.1f)
+        lastClock = g.clock
+        if (ghostDuel !== duel) {
+            ghostDuel = duel
+            ghostP = duel.playerHp.toFloat()
+            ghostE = duel.enemyHp.toFloat()
+        }
+        ghostP = drain(ghostP, duel.playerHp.toFloat(), dtc)
+        ghostE = drain(ghostE, duel.enemyHp.toFloat(), dtc)
+        hpBar(d, duel.player, duel.playerHp, duel.maxPlayerHp, ghostP, Color(0xFF34D399), duel.turn == Duel.Turn.PLAYER, g.clock, host.shields)
+        val ey = hpBar(d, duel.enemy, duel.enemyHp, duel.maxEnemyHp, ghostE, Color(0xFFF43F5E), false, g.clock, 0)
+        if (ey != null && host.enemyLabel.isNotEmpty() && host.phase != GameHost.Phase.MENU) {
+            val lay = layout(m, host.enemyLabel, textStyleLabel)
+            d.drawText(lay, topLeft = Offset(sx(duel.enemy.rootX) - lay.size.width / 2f, ey - lay.size.height - 3f))
+        }
+        // Speech bubble
+        val ba = g.clock - host.bubbleAt
+        if (host.bubbleText.isNotEmpty() && ba in 0f..2.4f && host.phase == GameHost.Phase.PLAYING) {
+            val who = if (host.bubbleEnemy) duel.enemy else duel.player
+            if (who.alive) bubble(d, m, host.bubbleText, who, ba, w)
+        }
         // Floating texts
         for (t in g.texts) {
             val age = g.clock - t.born
-            val style = when (t.kind) { 1 -> textStyleHead; 2 -> textStyleBig; else -> textStyleDmg }
+            val style = when (t.kind) { 1 -> textStyleHead; 2 -> textStyleBig; 3 -> textStyleHeal; else -> textStyleDmg }
             val lay = layout(m, if (t.kind == 2) HEADSHOT else t.text, style)
             val alpha = (1f - (age - 0.9f) / 0.5f).coerceIn(0f, 1f)
             val pop = if (age < 0.12f) 0.5f + age / 0.12f * 0.7f else 1.2f - min(0.2f, (age - 0.12f))
@@ -276,9 +322,277 @@ class ArcheryPainter {
             offscreen(d, m, duel.enemy, w, h, Color(0xFFF43F5E), duel.spec.distance)
             offscreen(d, m, duel.player, w, h, Color(0xFF34D399), duel.spec.distance)
         }
-        // Slow motion vignette and the headshot flash
+        // Slow motion vignette, flashes and the kill cam's cinema bars
         if (g.slow > 0.02f) d.drawRect(vignette, alpha = (g.slow * 0.75f).coerceAtMost(1f))
         if (g.flash > 0.02f) d.drawRect(Color.White, alpha = (g.flash * 0.45f).coerceAtMost(1f))
+        if (g.blastFlash > 0.02f) d.drawRect(Color(0xFFFF8A2B), alpha = (g.blastFlash * 0.35f).coerceAtMost(1f))
+        if (g.killCam > 0.01f) {
+            val bar = g.killCam * h * 0.11f
+            d.drawRect(Color.Black, Offset.Zero, Size(w, bar))
+            d.drawRect(Color.Black, Offset(0f, h - bar), Size(w, bar))
+        }
+    }
+
+    // Lost-HP chunk that drains after a short pause
+    private var ghostDuel: Duel? = null
+    private var ghostP = 100f
+    private var ghostE = 100f
+    private var lastClock = 0f
+
+    private fun drain(ghost: Float, cur: Float, dt: Float): Float {
+        if (ghost <= cur) return cur
+        return max(cur, ghost - max(8f, (ghost - cur) * 2.2f) * dt)
+    }
+
+    // ------------------------------------------------------------------ replay
+
+    private var replayP: Ragdoll? = null
+    private var replayE: Ragdoll? = null
+
+    /** Draws frame [frame] of the recorded killing blow. */
+    fun drawReplay(d: DrawScope, host: GameHost, frame: Int, clock: Float) {
+        val w = d.size.width
+        val h = d.size.height
+        if (w < 2f || h < 2f) return
+        val rec = host.game.recorder
+        val i = frame % Recorder.CAP
+        val world = host.world
+        val vw = rec.cam[i * 3 + 2].coerceAtLeast(3f)
+        setTransform(rec.cam[i * 3], rec.cam[i * 3 + 1], w / vw, w / 2f, h * 0.6f)
+        if (world !== sceneWorld || w != sceneW || h != sceneH) buildScene(world, w, h)
+        drawSky(d, w, h, clock, world, host.windKmh)
+        for (p in host.game.duel.platforms) drawPlatform(d, p.x0, p.x1, p.top, h, world)
+        val rp = replayP ?: Ragdoll(0f, 0f, 1f).also { replayP = it }
+        val re = replayE ?: Ragdoll(0f, 0f, -1f).also { replayE = it }
+        System.arraycopy(rec.pX, i * Ragdoll.N, rp.x, 0, Ragdoll.N)
+        System.arraycopy(rec.pY, i * Ragdoll.N, rp.y, 0, Ragdoll.N)
+        System.arraycopy(rec.eX, i * Ragdoll.N, re.x, 0, Ragdoll.N)
+        System.arraycopy(rec.eY, i * Ragdoll.N, re.y, 0, Ragdoll.N)
+        rp.alive = rec.alive[i * 2]
+        re.alive = rec.alive[i * 2 + 1]
+        rp.rootX = 0f; rp.rootY = 0f
+        drawArcher(d, re, host.enemyOutfit, host.enemyBow, rec.helmetOn[i], false, clock)
+        drawArcher(d, rp, host.playerOutfit, host.playerBow, false, false, clock)
+        for (j in 0 until rec.aCount[i]) {
+            val q = i * Recorder.ARROWS + j
+            val kind = rec.aKind[q]
+            drawArrow(d, rec.ax[q], rec.ay[q], rec.aa[q], kind >= 0, if (kind >= 0) host.playerBow else host.enemyBow, 1f, max(0, kind), clock)
+        }
+    }
+
+    // ------------------------------------------------------------------ battle extras
+
+    private fun drawProp(d: DrawScope, p: Prop, clock: Float) {
+        val x = sx(p.x)
+        val y = sy(p.y)
+        if (x < -100f || x > d.size.width + 100f) return
+        val s = 0.3f * k
+        if (p.kind == Prop.BIRD) {
+            val dir = if (p.vx >= 0f) 1f else -1f
+            d.rotate(if (p.alive) 0f else p.spin * 57f, Offset(x, y)) {
+                val flap = if (p.alive) sin(clock * 14f + p.phase) else -0.3f
+                // Wings
+                drawLine(OUTLINE_C, Offset(x, y), Offset(x - s * 0.9f * dir, y - s * (0.2f + flap * 0.7f)), s * 0.26f, StrokeCap.Round)
+                drawLine(Color(0xFF475569), Offset(x, y), Offset(x - s * 0.9f * dir, y - s * (0.2f + flap * 0.7f)), s * 0.16f, StrokeCap.Round)
+                // Body and head
+                drawOval(OUTLINE_C, Offset(x - s * 0.62f, y - s * 0.3f), Size(s * 1.24f, s * 0.6f))
+                drawOval(Color(0xFF64748B), Offset(x - s * 0.55f, y - s * 0.24f), Size(s * 1.1f, s * 0.48f))
+                drawCircle(OUTLINE_C, s * 0.28f, Offset(x + s * 0.55f * dir, y - s * 0.18f))
+                drawCircle(Color(0xFF64748B), s * 0.22f, Offset(x + s * 0.55f * dir, y - s * 0.18f))
+                drawLine(Color(0xFFF59E0B), Offset(x + s * 0.72f * dir, y - s * 0.16f), Offset(x + s * 0.98f * dir, y - s * 0.1f), s * 0.12f, StrokeCap.Round)
+                if (p.alive) drawCircle(Color.White, s * 0.07f, Offset(x + s * 0.62f * dir, y - s * 0.24f))
+                drawLine(OUTLINE_C, Offset(x, y), Offset(x - s * 0.5f * dir, y - s * (0.1f - flap * 0.5f)), s * 0.22f, StrokeCap.Round)
+                drawLine(Color(0xFF94A3B8), Offset(x, y), Offset(x - s * 0.5f * dir, y - s * (0.1f - flap * 0.5f)), s * 0.13f, StrokeCap.Round)
+            }
+        } else {
+            val c = BALLOONS[((p.phase * 10).toInt() % BALLOONS.size + BALLOONS.size) % BALLOONS.size]
+            val by = y - s * 0.5f
+            d.drawLine(Color(0x99FFFFFF), Offset(x, by + s * 1.1f), Offset(x + sin(clock * 2f + p.phase) * s * 0.3f, by + s * 3f), max(1f, 0.015f * k))
+            d.drawOval(OUTLINE_C, Offset(x - s * 0.85f, by - s * 1.05f), Size(s * 1.7f, s * 2.15f))
+            d.drawOval(c, Offset(x - s * 0.78f, by - s), Size(s * 1.56f, s * 2f))
+            d.drawOval(Color.White.copy(alpha = 0.45f), Offset(x - s * 0.5f, by - s * 0.75f), Size(s * 0.4f, s * 0.7f))
+            path.reset()
+            path.moveTo(x - s * 0.15f, by + s * 1.08f)
+            path.lineTo(x + s * 0.15f, by + s * 1.08f)
+            path.lineTo(x, by + s * 0.9f)
+            path.close()
+            d.drawPath(path, Palette.darker(c, 0.2f))
+        }
+    }
+
+    /** Pole with a pennant that streams with the wind (hangs when there is none). */
+    private fun flag(d: DrawScope, x: Float, top: Float, wind: Float, clock: Float, c: Color) {
+        val px = sx(x)
+        val base = sy(top)
+        val tp = sy(top + 2.4f)
+        if (px < -0.5f * d.size.width || px > d.size.width * 1.5f) return
+        d.drawLine(OUTLINE_C, Offset(px, base), Offset(px, tp), max(2f, 0.07f * k), StrokeCap.Round)
+        d.drawLine(Color(0xFF8B5A2B), Offset(px, base), Offset(px, tp), max(1.2f, 0.04f * k), StrokeCap.Round)
+        d.drawCircle(Color(0xFFFACC15), max(2f, 0.05f * k), Offset(px, tp))
+        val strength = (abs(wind) / 3f).coerceIn(0f, 1f)
+        val dir = if (wind >= 0f) 1f else -1f
+        // 0 = hanging straight down, 1 = flying straight out
+        val ang = (-1.35f + 1.3f * strength)
+        // Flag direction on screen and the perpendicular its width extends along
+        val ux = cos(ang) * dir
+        val uy = -sin(ang)
+        val nx = -uy * dir
+        val ny = ux * dir
+        val len = 0.8f * k
+        val wid = 0.42f * k
+        val ox = px
+        val oy = tp + 0.03f * k
+        val speed = 5f + 6f * strength
+        path2.reset()
+        path2.moveTo(ox, oy)
+        for (i in 1..6) {
+            val u = i / 6f
+            val wave = sin(clock * speed - u * 4f) * 0.09f * k * u
+            path2.lineTo(ox + ux * len * u + nx * wave, oy + uy * len * u + ny * wave)
+        }
+        for (i in 6 downTo 0) {
+            val u = i / 6f
+            val wave = sin(clock * speed - u * 4f) * 0.09f * k * u
+            val wd = wid * (1f - u * 0.75f)
+            path2.lineTo(ox + ux * len * u + nx * (wave + wd), oy + uy * len * u + ny * (wave + wd))
+        }
+        path2.close()
+        d.drawPath(path2, OUTLINE_C, style = thinStroke)
+        d.drawPath(path2, c)
+    }
+
+    private fun torch(d: DrawScope, x: Float, top: Float, clock: Float) {
+        val px = sx(x)
+        if (px < -100f || px > d.size.width + 100f) return
+        val base = sy(top)
+        val tp = sy(top + 1.5f)
+        val f = 0.85f + 0.15f * sin(clock * 17f) + 0.08f * sin(clock * 31f)
+        // Warm glow
+        for (r in 0..2) d.drawCircle(Color(0xFFFFA94D).copy(alpha = 0.07f), (1.6f - r * 0.45f) * k * f, Offset(px, tp - 0.15f * k))
+        d.drawLine(OUTLINE_C, Offset(px, base), Offset(px, tp), max(2f, 0.09f * k), StrokeCap.Round)
+        d.drawLine(Color(0xFF6B4423), Offset(px, base), Offset(px, tp), max(1.2f, 0.06f * k), StrokeCap.Round)
+        d.drawRect(Color(0xFF3F3F46), Offset(px - 0.09f * k, tp - 0.05f * k), Size(0.18f * k, 0.1f * k))
+        d.drawOval(Color(0xFFF97316), Offset(px - 0.12f * k * f, tp - 0.42f * k * f), Size(0.24f * k * f, 0.4f * k * f))
+        d.drawOval(Color(0xFFFDE047), Offset(px - 0.07f * k * f, tp - 0.3f * k * f), Size(0.14f * k * f, 0.26f * k * f))
+    }
+
+    private fun rain(d: DrawScope, w: Float, h: Float, clock: Float, windKmh: Int, storm: Boolean) {
+        val n = if (storm) 80 else 55
+        val slant = windKmh / 25f
+        val len = h * 0.035f
+        for (i in 0 until n) {
+            val a = airA[i % AIR] + i * 0.618f
+            val b = airB[i % AIR] + i * 0.37f
+            val sp = 1.6f + airS[i % AIR] * 0.6f
+            val x = frac(a + clock * slant * 0.15f) * w * 1.1f - w * 0.05f
+            val y = frac(b + clock * sp) * (h + len) - len
+            d.drawLine(Color(0x66DCE6F5), Offset(x, y), Offset(x + slant * len * 0.4f, y + len), max(1f, w * 0.0018f))
+        }
+    }
+
+    private fun fog(d: DrawScope, w: Float, h: Float, clock: Float, world: World) {
+        val c = Palette.lighter(rgb(world.skyBottom), 0.4f)
+        for (i in 0 until 6) {
+            val r = w * (0.35f + airS[i] * 0.2f)
+            val x = frac(airA[i] + clock * 0.012f * (0.5f + airS[i])) * (w + 2f * r) - r
+            val y = h * (0.55f + airB[i] * 0.4f)
+            d.drawOval(c.copy(alpha = 0.16f), Offset(x - r, y - r * 0.3f), Size(r * 2f, r * 0.6f))
+        }
+        d.drawRect(c.copy(alpha = 0.14f), Offset(0f, h * 0.5f), Size(w, h * 0.5f))
+    }
+
+    private fun bolt(d: DrawScope, w: Float, h: Float, bx: Float) {
+        path2.reset()
+        var x = bx * w
+        var y = 0f
+        path2.moveTo(x, y)
+        var s = (bx * 1000f).toInt()
+        while (y < h * 0.5f) {
+            s = (s * 1103515245 + 12345) and 0x7fffffff
+            x += ((s % 1000) / 1000f - 0.5f) * w * 0.12f
+            y += h * 0.05f
+            path2.lineTo(x, y)
+        }
+        d.drawPath(path2, Color.White.copy(alpha = 0.35f), style = glowStroke)
+        d.drawPath(path2, Color.White, style = thinStroke)
+    }
+
+    /** The knight's magic bubble, cracking after the first hit. */
+    private fun shieldBubble(d: DrawScope, r: Ragdoll, left: Int, clock: Float) {
+        val c = Offset(sx(r.x[Ragdoll.CHEST]), sy(r.y[Ragdoll.CHEST] + 0.1f))
+        val rad = Duel.SHIELD_R * k
+        val pulse = 1f + sin(clock * 3f) * 0.02f
+        d.drawCircle(Color(0xFF38BDF8).copy(alpha = 0.14f), rad * pulse, c)
+        d.drawCircle(Color(0xFF7DD3FC).copy(alpha = 0.75f), rad * pulse, c, style = thinStroke)
+        d.drawArc(Color.White.copy(alpha = 0.5f), (clock * 40f) % 360f, 50f, false, Offset(c.x - rad * 0.85f, c.y - rad * 0.85f), Size(rad * 1.7f, rad * 1.7f), style = thinStroke)
+        if (left == 1) {
+            // Cracks spreading from where it was hit
+            for (j in 0 until 5) {
+                path2.reset()
+                val a0 = -0.6f + j * 0.35f
+                var px = c.x + cos(a0) * rad * 0.95f * -r.facing
+                var py = c.y - sin(a0) * rad * 0.95f
+                path2.moveTo(px, py)
+                for (q in 1..3) {
+                    px -= cos(a0 + q * 0.5f * (if (j % 2 == 0) 1f else -1f)) * rad * 0.16f * -r.facing
+                    py += sin(a0 + q * 0.4f) * rad * 0.12f
+                    path2.lineTo(px, py)
+                }
+                d.drawPath(path2, Color.White.copy(alpha = 0.85f), style = thinStroke)
+            }
+        }
+    }
+
+    /** Frozen enemy: a block of ice around the body. */
+    private fun iceBlock(d: DrawScope, r: Ragdoll, clock: Float) {
+        var x0 = Float.MAX_VALUE; var x1 = -Float.MAX_VALUE; var y0 = Float.MAX_VALUE; var y1 = -Float.MAX_VALUE
+        for (i in 0 until Ragdoll.N) {
+            x0 = min(x0, r.x[i]); x1 = max(x1, r.x[i]); y0 = min(y0, r.y[i]); y1 = max(y1, r.y[i])
+        }
+        val l = sx(x0 - 0.3f); val rr = sx(x1 + 0.3f); val t = sy(y1 + 0.35f); val b = sy(y0 - 0.05f)
+        val cr = androidx.compose.ui.geometry.CornerRadius(0.12f * k)
+        d.drawRoundRect(Color(0xFF67E8F9).copy(alpha = 0.38f), Offset(l, t), Size(rr - l, b - t), cr)
+        d.drawRoundRect(Color.White.copy(alpha = 0.8f), Offset(l, t), Size(rr - l, b - t), cr, style = thinStroke)
+        val sh = (clock * 0.6f) % 1f
+        d.drawLine(Color.White.copy(alpha = 0.55f), Offset(l + (rr - l) * (0.1f + sh * 0.5f), t + 4f), Offset(l + (rr - l) * (sh * 0.5f), b - 4f), max(2f, 0.05f * k))
+        d.drawLine(Color.White.copy(alpha = 0.35f), Offset(l + (rr - l) * 0.8f, t + 6f), Offset(l + (rr - l) * 0.62f, t + (b - t) * 0.4f), max(1.5f, 0.03f * k))
+    }
+
+    private fun helmetDebris(d: DrawScope, hd: Debris) {
+        val c = Offset(sx(hd.x), sy(hd.y))
+        val hr = Ragdoll.HEAD_R * k * 1.2f
+        d.rotate(hd.rot, c) {
+            drawArc(OUTLINE_C, 175f, 190f, true, Offset(c.x - hr * 1.12f - outPx, c.y - hr * 1.15f - outPx), Size(hr * 2.24f + outPx * 2f, hr * 2f + outPx * 2f))
+            drawArc(Color(0xFFCBD5E1), 175f, 190f, true, Offset(c.x - hr * 1.12f, c.y - hr * 1.15f), Size(hr * 2.24f, hr * 2f))
+            drawRect(Color(0xFF64748B), Offset(c.x - hr * 1.1f, c.y - hr * 0.2f), Size(hr * 2.2f, hr * 0.18f))
+        }
+    }
+
+    private fun bubble(d: DrawScope, m: TextMeasurer, text: String, r: Ragdoll, age: Float, w: Float) {
+        val lay = layout(m, text, textStyleBubble)
+        val pad = w * 0.02f
+        val bw = lay.size.width + pad * 2f
+        val bh = lay.size.height + pad * 1.2f
+        val hx = sx(r.x[Ragdoll.HEAD])
+        val hy = sy(r.y[Ragdoll.HEAD]) - Ragdoll.HEAD_R * k * 2.2f - max(0.6f * k, w * 0.075f)
+        var left = hx - bw / 2f
+        left = left.coerceIn(8f, w - bw - 8f)
+        val top = hy - bh
+        val pop = if (age < 0.15f) 0.6f + age / 0.15f * 0.4f else 1f
+        val alpha = if (age > 2.1f) ((2.4f - age) / 0.3f).coerceIn(0f, 1f) else 1f
+        d.scale(pop, pop, Offset(hx, hy)) {
+            val cr = androidx.compose.ui.geometry.CornerRadius(bh * 0.45f)
+            drawRoundRect(OUTLINE_C.copy(alpha = alpha), Offset(left - 2.5f, top - 2.5f), Size(bw + 5f, bh + 5f), cr)
+            path.reset()
+            path.moveTo(hx - pad * 0.6f, top + bh - 1f)
+            path.lineTo(hx + pad * 0.6f, top + bh - 1f)
+            path.lineTo(hx, top + bh + pad * 1.1f)
+            path.close()
+            drawPath(path, OUTLINE_C.copy(alpha = alpha), style = thinStroke)
+            drawPath(path, Color.White.copy(alpha = alpha))
+            drawRoundRect(Color.White.copy(alpha = alpha), Offset(left, top), Size(bw, bh), cr)
+            drawText(lay, topLeft = Offset(left + pad, top + pad * 0.6f), alpha = alpha)
+        }
     }
 
     // ------------------------------------------------------------------ scenery
@@ -529,7 +843,7 @@ class ArcheryPainter {
     private var outPx = 1f
 
     /** Draws a ragdoll archer with its look; [nock] puts an arrow on the string. */
-    fun drawArcher(d: DrawScope, r: Ragdoll, o: Outfit, b: Bow, helmet: Boolean, nock: Boolean, clock: Float) {
+    fun drawArcher(d: DrawScope, r: Ragdoll, o: Outfit, b: Bow, helmet: Boolean, nock: Boolean, clock: Float, nockKind: Int = 0) {
         val x = r.x
         val y = r.y
         outPx = max(1.2f, OUTLINE * k)
@@ -602,7 +916,7 @@ class ArcheryPainter {
         // Head
         drawHead(d, r, o, helmet)
         // Bow, string and nocked arrow
-        drawBow(d, r, b, nock, clock)
+        drawBow(d, r, b, nock, clock, nockKind)
         // Bow arm in front, with its outline
         for (p in 0..1) {
             pass = p
@@ -831,7 +1145,7 @@ class ArcheryPainter {
         }
     }
 
-    fun drawBow(d: DrawScope, r: Ragdoll, b: Bow, nock: Boolean, clock: Float) {
+    fun drawBow(d: DrawScope, r: Ragdoll, b: Bow, nock: Boolean, clock: Float, nockKind: Int = 0) {
         val hxW = r.x[Ragdoll.R_HAND]; val hyW = r.y[Ragdoll.R_HAND]
         var dx = hxW - r.x[Ragdoll.R_ELBOW]; var dy = hyW - r.y[Ragdoll.R_ELBOW]
         val l = sqrt(dx * dx + dy * dy)
@@ -868,7 +1182,7 @@ class ArcheryPainter {
             val ax = (spx + sdx * 0.35f * k)
             val ay = (spy + sdy * 0.35f * k)
             val ang = atan2(-sdy, sdx)
-            drawArrowScreen(d, ax, ay, ang, true, b, 1f)
+            drawArrowScreen(d, ax, ay, ang, true, b, 1f, nockKind, clock)
         }
         // Limbs
         when (b.style) {
@@ -901,12 +1215,12 @@ class ArcheryPainter {
 
     // ------------------------------------------------------------------ arrows
 
-    private fun drawArrow(d: DrawScope, x: Float, y: Float, angle: Float, byPlayer: Boolean, b: Bow, alpha: Float) {
-        drawArrowScreen(d, sx(x), sy(y), angle, byPlayer, b, alpha)
+    private fun drawArrow(d: DrawScope, x: Float, y: Float, angle: Float, byPlayer: Boolean, b: Bow, alpha: Float, kind: Int = 0, clock: Float = 0f) {
+        drawArrowScreen(d, sx(x), sy(y), angle, byPlayer, b, alpha, kind, clock)
     }
 
     /** Arrow centred at screen (x, y), world angle [angle] (up positive). */
-    fun drawArrowScreen(d: DrawScope, x: Float, y: Float, angle: Float, byPlayer: Boolean, b: Bow, alpha: Float) {
+    fun drawArrowScreen(d: DrawScope, x: Float, y: Float, angle: Float, byPlayer: Boolean, b: Bow, alpha: Float, kind: Int = 0, clock: Float = 0f) {
         val dx = cos(angle); val dy = -sin(angle)
         val px = -dy; val py = dx
         val half = 0.36f * k
@@ -917,7 +1231,25 @@ class ArcheryPainter {
         d.drawLine(OUTLINE_C.copy(alpha = alpha), Offset(tailX, tailY), Offset(tipX, tipY), sw + max(1.6f, 0.03f * k), StrokeCap.Round)
         d.drawLine(Color(0xFF9A6332).copy(alpha = alpha), Offset(tailX, tailY), Offset(tipX, tipY), sw, StrokeCap.Round)
         d.drawLine(Color(0xFFD9A066).copy(alpha = alpha * 0.8f), Offset(tailX - px * sw * 0.2f, tailY - py * sw * 0.2f), Offset(tipX - px * sw * 0.2f, tipY - py * sw * 0.2f), sw * 0.35f)
-        // Head (steel, with a bright edge)
+        if (kind == ArrowKind.BOMB) {
+            // A little round bomb instead of a head, with a sparking fuse.
+            val bx = tipX + dx * 0.02f * k
+            val by = tipY + dy * 0.02f * k
+            d.drawCircle(OUTLINE_C.copy(alpha = alpha), 0.11f * k + 1.5f, Offset(bx, by))
+            d.drawCircle(Color(0xFF27272A).copy(alpha = alpha), 0.11f * k, Offset(bx, by))
+            d.drawCircle(Color.White.copy(alpha = alpha * 0.5f), 0.035f * k, Offset(bx - 0.04f * k, by - 0.04f * k))
+            val fx = bx - px * 0.11f * k
+            val fy = by - py * 0.11f * k - 0.04f * k
+            d.drawLine(Color(0xFFD6D3D1).copy(alpha = alpha), Offset(bx - px * 0.08f * k, by - py * 0.08f * k), Offset(fx, fy), max(1f, 0.02f * k))
+            d.drawCircle(Color(0xFFFDE047).copy(alpha = alpha * (0.6f + 0.4f * sin(clock * 40f))), 0.04f * k, Offset(fx, fy))
+        } else {
+        // Head (steel, with a bright edge; cyan crystal for ice, glowing for fire)
+        if (kind == ArrowKind.FIRE) {
+            val f = 0.85f + 0.15f * sin(clock * 30f)
+            d.drawCircle(Color(0xFFF97316).copy(alpha = alpha * 0.45f), 0.2f * k * f, Offset(tipX + dx * 0.05f * k, tipY + dy * 0.05f * k))
+            d.drawCircle(Color(0xFFFDE047).copy(alpha = alpha * 0.6f), 0.11f * k * f, Offset(tipX + dx * 0.06f * k, tipY + dy * 0.06f * k))
+        }
+        if (kind == ArrowKind.ICE) d.drawCircle(Color(0xFFA5F3FC).copy(alpha = alpha * 0.45f), 0.17f * k, Offset(tipX + dx * 0.05f * k, tipY + dy * 0.05f * k))
         path.reset()
         path.moveTo(tipX + dx * 0.13f * k, tipY + dy * 0.13f * k)
         path.lineTo(tipX + px * 0.06f * k - dx * 0.01f * k, tipY + py * 0.06f * k - dy * 0.01f * k)
@@ -925,10 +1257,18 @@ class ArcheryPainter {
         path.lineTo(tipX - px * 0.06f * k - dx * 0.01f * k, tipY - py * 0.06f * k - dy * 0.01f * k)
         path.close()
         d.drawPath(path, OUTLINE_C.copy(alpha = alpha), style = thinStroke)
-        d.drawPath(path, Color(0xFF94A3B8).copy(alpha = alpha))
+        d.drawPath(path, (when (kind) { ArrowKind.ICE -> Color(0xFF67E8F9); ArrowKind.FIRE -> Color(0xFFF97316); else -> Color(0xFF94A3B8) }).copy(alpha = alpha))
         d.drawLine(Color.White.copy(alpha = alpha * 0.8f), Offset(tipX + dx * 0.12f * k, tipY + dy * 0.12f * k), Offset(tipX + px * 0.045f * k, tipY + py * 0.045f * k), max(1f, 0.012f * k))
+        }
         // Fletching
-        val fc = if (byPlayer) rgb(b.trail) else Color(0xFFEF4444)
+        val fc = when {
+            !byPlayer -> Color(0xFFEF4444)
+            kind == ArrowKind.FIRE -> Color(0xFFF97316)
+            kind == ArrowKind.ICE -> Color(0xFF67E8F9)
+            kind == ArrowKind.BOMB -> Color(0xFF52525B)
+            kind == ArrowKind.TRIPLE -> Color(0xFFFACC15)
+            else -> rgb(b.trail)
+        }
         for (s in -1..1 step 2) {
             path.reset()
             path.moveTo(tailX + dx * 0.02f * k, tailY + dy * 0.02f * k)
@@ -973,13 +1313,14 @@ class ArcheryPainter {
             Trails.GOLD -> Color(0xFFFFD34D)
             Trails.GHOST -> Color.White
             Trails.NEON -> Color(0xFFF0ABFC)
+            FIRE_TRAIL -> Color(0xFFFF7A1A)
             else -> rgb(color)
         }
         for (i in 1 until trailN) {
             val f = i / trailN.toFloat()
             val c = if (style == Trails.RAINBOW) Color.hsv(((i * 24f + clock * 200f) % 360f + 360f) % 360f, 0.8f, 1f) else base
             val a = when (style) { Trails.GHOST -> 0.22f; Trails.NEON -> 0.75f; else -> 0.5f } * f
-            val wpx = (when (style) { Trails.GHOST, Trails.NEON -> 0.14f; Trails.BLUE_FIRE -> 0.12f; else -> 0.08f }) * k * (0.35f + 0.65f * f)
+            val wpx = (when (style) { Trails.GHOST, Trails.NEON -> 0.14f; Trails.BLUE_FIRE, FIRE_TRAIL -> 0.13f; else -> 0.08f }) * k * (0.35f + 0.65f * f)
             d.drawLine(c.copy(alpha = a), Offset(sx(trailX[i - 1]), sy(trailY[i - 1])), Offset(sx(trailX[i]), sy(trailY[i])), wpx, StrokeCap.Round)
             if ((style == Trails.STARS || style == Trails.GOLD) && i % 3 == 0) {
                 val j = sin(i * 12.9898f + clock * 3f) * 0.12f
@@ -990,32 +1331,52 @@ class ArcheryPainter {
 
     // ------------------------------------------------------------------ HUD in the world
 
-    private fun hpBar(d: DrawScope, r: Ragdoll, hp: Int, maxHp: Int, color: Color, myTurn: Boolean, clock: Float, shields: Int) {
-        if (!r.alive && hp <= 0) return
-        val bw = max(1.05f * k, d.size.width * 0.12f)
-        val bh = max(0.13f * k, d.size.width * 0.016f)
+    /** Health bar over an archer; the chunk just lost ([ghost]) drains behind. Returns its top (or null). */
+    private fun hpBar(d: DrawScope, r: Ragdoll, hp: Int, maxHp: Int, ghost: Float, color: Color, myTurn: Boolean, clock: Float, shields: Int): Float? {
+        if (!r.alive && hp <= 0 && ghost <= 0.5f) return null
+        val bw = max(1.05f * k, d.size.width * 0.13f)
+        val bh = max(0.13f * k, d.size.width * 0.018f)
         val x = sx(r.rootX) - bw / 2f
-        val y = sy(r.rootY + 2.3f)
-        if (x > d.size.width || x + bw < 0f) return
-        d.drawRoundRect(Color(0x99000000), Offset(x - 2f, y - 2f), Size(bw + 4f, bh + 4f), androidx.compose.ui.geometry.CornerRadius(bh))
+        val y = sy(r.rootY + 2.3f) - max(0f, d.size.width * 0.03f - 0.3f * k)
+        if (x > d.size.width || x + bw < 0f) return null
+        val cr = androidx.compose.ui.geometry.CornerRadius(bh / 2f)
+        d.drawRoundRect(OUTLINE_C, Offset(x - 2.5f, y - 2.5f), Size(bw + 5f, bh + 5f), androidx.compose.ui.geometry.CornerRadius(bh))
+        d.drawRoundRect(Color(0xFF2A2236), Offset(x, y), Size(bw, bh), cr)
         val f = (hp / maxHp.toFloat()).coerceIn(0f, 1f)
-        if (f > 0f) d.drawRoundRect(color, Offset(x, y), Size(max(bh, bw * f), bh), androidx.compose.ui.geometry.CornerRadius(bh / 2f))
-        d.drawRoundRect(Color.White.copy(alpha = 0.3f), Offset(x + bh * 0.3f, y + bh * 0.15f), Size(max(0f, bw * f - bh * 0.6f), bh * 0.25f), androidx.compose.ui.geometry.CornerRadius(bh / 2f))
+        val gf = (ghost / maxHp).coerceIn(0f, 1f)
+        if (gf > f) d.drawRoundRect(Color(0xFFFFF3B0), Offset(x, y), Size(max(bh, bw * gf), bh), cr)
+        if (f > 0f) {
+            // Low health blinks
+            val c = if (f < 0.3f && sin(clock * 10f) > 0f) Palette.lighter(color, 0.35f) else color
+            d.drawRoundRect(c, Offset(x, y), Size(max(bh, bw * f), bh), cr)
+            d.drawRoundRect(Color.White.copy(alpha = 0.32f), Offset(x + bh * 0.3f, y + bh * 0.15f), Size(max(0f, bw * f - bh * 0.6f), bh * 0.25f), cr)
+        }
+        // Ticks every 25 HP
+        var t = 25
+        while (t < maxHp) {
+            val tx = x + bw * t / maxHp
+            d.drawLine(Color(0x55000000), Offset(tx, y + 1f), Offset(tx, y + bh - 1f), 1.5f)
+            t += 25
+        }
         if (shields > 0) {
+            d.drawCircle(OUTLINE_C, bh * 1.1f + 2f, Offset(x - bh * 1.6f, y + bh / 2f))
             d.drawCircle(Color(0xFF38BDF8), bh * 1.1f, Offset(x - bh * 1.6f, y + bh / 2f))
             d.drawCircle(Color.White.copy(alpha = 0.6f), bh * 0.5f, Offset(x - bh * 1.6f, y + bh / 2f))
         }
         if (myTurn) {
-            val bob = sin(clock * 6f) * 0.06f * k
+            val bob = sin(clock * 6f) * bh * 0.5f
             path.reset()
             val tx = x + bw / 2f
-            val ty = y - 0.12f * k + bob
-            path.moveTo(tx - 0.1f * k, ty - 0.14f * k)
-            path.lineTo(tx + 0.1f * k, ty - 0.14f * k)
+            val ty = y - bh * 0.8f + bob
+            path.moveTo(tx - bh * 0.8f, ty - bh * 1.1f)
+            path.lineTo(tx + bh * 0.8f, ty - bh * 1.1f)
             path.lineTo(tx, ty)
             path.close()
+            d.drawPath(path, OUTLINE_C, style = thinStroke)
             d.drawPath(path, Color(0xFFFACC15))
+            return ty - bh * 1.2f
         }
+        return y - 3f
     }
 
     private fun offscreen(d: DrawScope, m: TextMeasurer, r: Ragdoll, w: Float, h: Float, color: Color, distance: Float) {
@@ -1049,8 +1410,10 @@ class ArcheryPainter {
     companion object {
         const val AIR = 40
         const val OUTLINE = 0.026f
+        const val FIRE_TRAIL = 100
         val OUTLINE_C = Color(0xFF1A1226)
         val HAIR_C = Color(0xFF3B2416)
+        val BALLOONS = arrayOf(Color(0xFFF43F5E), Color(0xFFFACC15), Color(0xFF38BDF8), Color(0xFFA78BFA), Color(0xFF34D399), Color(0xFFFB923C), Color(0xFFF472B6), Color(0xFFE11D48), Color(0xFF22D3EE), Color(0xFF84CC16))
         val QUIVER_FLETCH = arrayOf(Color(0xFFF8FAFC), Color(0xFFEF4444), Color(0xFFFACC15))
         const val TRAIL = 22
         const val HEADSHOT = "HEADSHOT!"

@@ -37,6 +37,12 @@ sem outras redes, sem assinatura, sem compras no app.
 - `Levels.level(n)` determinístico: distância 13→27+ m, desnível, vento, vida e habilidade sobem até ~fase 80.
   Chefe a cada 10 (`isBoss`): mais vida, capacete, prêmio ×3. `daily(dia)` igual para todos no dia.
 - Continuar por vídeo (`Duel.revivePlayer`) uma vez por fase: volta com 50 de vida.
+- Flechas especiais (`ArrowKind`, estoque em `Progress.arrowStock`, 2 de cada para novatos; loja: pacote de 3; vídeo: +1):
+  fogo (×1,5 e queima), tripla (3 em leque, ×0,6 cada), bomba (explode, dano em área `BLAST_*`), gelo (inimigo perde a vez).
+  Várias flechas podem voar juntas (`Duel.inFlight`); o turno passa quando todas caem (`land`).
+- Flecha rápida que mata atravessa (`PIERCE_SPEED`); capacete voa no 1º tiro na cabeça (`helmetOn`).
+- Chefes com habilidade (`BossPower`, pela armadura): cavaleiro = bolha que aguenta 2 acertos, samurai = mira melhor,
+  viking = 2 flechas, rei = se cura a cada turno.
 - Sobrevivência (`GameHost.playEndless`): um inimigo atrás do outro (`survivalSpec(k)`), +25 de vida entre eles;
   recorde em `Progress.bestEndless` (inimigos derrotados).
 
@@ -45,8 +51,8 @@ sem outras redes, sem assinatura, sem compras no app.
 | Arquivo | O que tem |
 |---|---|
 | `game/Archery.kt` | Física (`Ragdoll`, `Arrow`), `Duel` (turnos, acertos, IA), `Levels`. |
-| `game/ArcheryGame.kt` | Câmera (segue a flecha), câmera lenta, tremida, partículas (`Particles`, sem alocar), textos de dano, demo do menu com robô. |
-| `game/GameHost.kt` | Estado da partida para o Compose, sons, vibração, pontos, moedas, missões, conquistas, sobrevivência. Tudo na thread principal: `GameView` chama `frame(dt)` a cada quadro. |
+| `game/ArcheryGame.kt` | Câmera (panorama padrão, segue a flecha, câmera do golpe final com `Duel.predictKill`), câmera lenta, tremida, partículas (`Particles`, sem alocar), pássaros/balões bônus (`Prop`), capacete voando, gravação do replay (`Recorder`, 30 fps em arrays fixos), demo do menu. |
+| `game/GameHost.kt` | Estado da partida para o Compose, sons, vibração, pontos, moedas, missões, conquistas, sobrevivência, títulos de combo (`TitleShow`), provocações (balão), nome/nível do inimigo, clima (`Weather`, relâmpago), flecha especial escolhida. Tudo na thread principal: `GameView` chama `frame(dt)` a cada quadro. |
 | `ui/ArcheryPainter.kt` | `GameView` (laço com `withFrameNanos`, o Canvas só lê um `tick` → nada recompõe) e o desenho: céu, 2 camadas de cenário em `Path` cacheado por mundo, plataformas, arqueiros (roupas/chapéus/arcos), flechas, rastro, guia, barras de vida, marcadores fora da tela, vinheta da câmera lenta. |
 | `data/Looks.kt` | 13 roupas (`Outfit`, chapéu `Hat`), 9 arcos (`Bow`, `BowStyle`), 8 mundos (`World`: céu, cenário, pedra, partículas). |
 | `data/Achievements.kt`, `data/Trails.kt`, `data/Missions.kt`, `data/Progress.kt` | Conquistas, rastros das flechas, missões diárias e tudo que persiste. |
