@@ -104,11 +104,16 @@ cobrem a tela inteira e pausam o desenho (`host.renderPaused`).
 
 ## Forma de trabalho
 
-- Não tirar prints nem rodar no emulador: só publicar o APK (push na `main`); o Eldo testa no celular e manda prints.
+- Não tirar prints nem rodar no emulador. O CI agora gera só o AAB de release (não há mais APK de teste em Releases);
+  para o Eldo testar algo antes de publicar, combinar com ele (ex.: teste interno na Play Console).
+
+## Publicação
+
+- **Publicado na Play Store em 2026-10-31**, versão 1.0.1 (`versionName` em `app/build.gradle.kts`). O `versionCode`
+  é o número da execução do Actions (`github.run_number`), então cada push gera um AAB com código maior.
+- Próxima atualização: subir o `versionName` (1.0.2…), push na `main`, baixar o artefato `PrismaArchers-release-aab` e enviar
+  na Play Console.
 
 ## Pendências
 
-1. Eldo testar no celular: sensação da mira (`FULL_POWER_DRAG` em `GameScreen.kt`), câmera, dificuldade, desempenho.
-2. Prints da loja (o Eldo tira no celular). Ícone, gráfico e textos (8 idiomas) prontos.
-3. Seguir `store/PUBLICAR.md`: keystore + secrets `KEYSTORE_*`, app e blocos no AdMob + secrets `ADMOB_*`, Play Console.
-4. `docs/privacy.html` publicado no GitHub Pages (link em `ui/Dialogs.kt`).
+1. Ideias para atualizações: ver com o Eldo (ele testou e aprovou a versão publicada).
